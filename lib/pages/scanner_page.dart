@@ -117,20 +117,36 @@ class _ScannerPageState extends State<ScannerPage> {
           children: [
             widget.isCameraInitialized && widget.cameraController != null
                 ? CameraPreview(widget.cameraController!)
-                : const Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        CircularProgressIndicator(color: Colors.white),
-                        SizedBox(height: 16),
-                        Text(
-                          'Initializing camera...',
-                          style: TextStyle(color: Colors.white54),
-                        ),
-                      ],
-                    ),
-                  ),
+                : _buildCameraPlaceholder(),
             _buildViewfinderOverlay(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCameraPlaceholder() {
+    return Container(
+      color: Colors.black,
+      child: const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white24),
+            SizedBox(height: 16),
+            Text(
+              'Camera not available',
+              style: TextStyle(color: Colors.white54, fontSize: 14),
+            ),
+            SizedBox(height: 8),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                'Please run on a physical device to use camera',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ),
           ],
         ),
       ),
