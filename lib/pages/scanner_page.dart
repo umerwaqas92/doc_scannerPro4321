@@ -8,6 +8,10 @@ class ScannerPage extends StatefulWidget {
   final VoidCallback onDone;
   final VoidCallback onCapture;
   final VoidCallback onAddFromGallery;
+  final CameraController? cameraController;
+  final bool isCameraInitialized;
+  final List<File> capturedImages;
+  final Function(int) onRemoveImage;
 
   const ScannerPage({
     super.key,
@@ -15,6 +19,10 @@ class ScannerPage extends StatefulWidget {
     required this.onDone,
     required this.onCapture,
     required this.onAddFromGallery,
+    required this.cameraController,
+    required this.isCameraInitialized,
+    required this.capturedImages,
+    required this.onRemoveImage,
   });
 
   @override
@@ -24,19 +32,6 @@ class ScannerPage extends StatefulWidget {
 class _ScannerPageState extends State<ScannerPage> {
   int _selectedFilter = 0;
   final List<String> _filters = ['Auto', 'B&W', 'Color', 'Grayscale', 'Photo'];
-  List<File> _capturedImages = [];
-
-  void addImage(File image) {
-    setState(() {
-      _capturedImages.add(image);
-    });
-  }
-
-  void removeImage(int index) {
-    setState(() {
-      _capturedImages.removeAt(index);
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +44,7 @@ class _ScannerPageState extends State<ScannerPage> {
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  _buildViewfinder(),
+                  _buildCameraPreview(),
                   _buildFilterStrip(),
                   _buildCaptureControls(),
                   _buildThumbStrip(),
@@ -71,19 +66,16 @@ class _ScannerPageState extends State<ScannerPage> {
         children: [
           _buildHeaderButton('✕ Cancel', widget.onCancel),
           Text(
-            _capturedImages.isEmpty
+            widget.capturedImages.isEmpty
                 ? 'Scan Document'
-                : '${_capturedImages.length} scanned',
+                : '${widget.capturedImages.length} scanned',
             style: const TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
               color: Colors.white,
             ),
           ),
-          _buildHeaderButton(
-            _capturedImages.isEmpty ? 'Skip' : 'Done',
-            widget.onDone,
-          ),
+          _buildHeaderButton('Done', widget.onDone),
         ],
       ),
     );
@@ -110,7 +102,7 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Widget _buildViewfinder() {
+  Widget _buildCameraPreview() {
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       height: 380,
@@ -118,58 +110,81 @@ class _ScannerPageState extends State<ScannerPage> {
         color: Colors.black,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Stack(
-        children: [
-          Center(
-            child: Container(
-              width: 220,
-              height: 290,
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  width: 2,
-                ),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Stack(
-                children: [
-                  Positioned(
-                    top: -1,
-                    left: -1,
-                    child: _buildCorner(true, true),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            widget.isCameraInitialized && widget.cameraController != null
+                ? CameraPreview(widget.cameraController!)
+                : const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(color: Colors.white),
+                        SizedBox(height: 16),
+                        Text(
+                          'Initializing camera...',
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      ],
+                    ),
                   ),
-                  Positioned(
-                    top: -1,
-                    right: -1,
-                    child: _buildCorner(true, false),
-                  ),
-                  Positioned(
-                    bottom: -1,
-                    left: -1,
-                    child: _buildCorner(false, true),
-                  ),
-                  Positioned(
-                    bottom: -1,
-                    right: -1,
-                    child: _buildCorner(false, false),
-                  ),
-                  _buildScanLine(),
-                ],
-              ),
-            ),
-          ),
-          const Positioned(
-            bottom: 14,
-            left: 0,
-            right: 0,
-            child: Text(
-              'Align document within frame',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.white54),
-            ),
-          ),
-        ],
+            _buildViewfinderOverlay(),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildViewfinderOverlay() {
+    return Stack(
+      children: [
+        Center(
+          child: Container(
+            width: 220,
+            height: 290,
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.85),
+                width: 2,
+              ),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Stack(
+              children: [
+                Positioned(top: -1, left: -1, child: _buildCorner(true, true)),
+                Positioned(
+                  top: -1,
+                  right: -1,
+                  child: _buildCorner(true, false),
+                ),
+                Positioned(
+                  bottom: -1,
+                  left: -1,
+                  child: _buildCorner(false, true),
+                ),
+                Positioned(
+                  bottom: -1,
+                  right: -1,
+                  child: _buildCorner(false, false),
+                ),
+                _buildScanLine(),
+              ],
+            ),
+          ),
+        ),
+        const Positioned(
+          bottom: 14,
+          left: 0,
+          right: 0,
+          child: Text(
+            'Align document within frame',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Colors.white54),
+          ),
+        ),
+      ],
     );
   }
 
@@ -335,10 +350,10 @@ class _ScannerPageState extends State<ScannerPage> {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Row(
         children: [
-          ...List.generate(_capturedImages.length, (index) {
+          ...List.generate(widget.capturedImages.length, (index) {
             return Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: _buildThumbItem(true, index),
+              child: _buildThumbItem(index),
             );
           }),
           _buildThumbAddButton(),
@@ -347,9 +362,10 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Widget _buildThumbItem(bool hasContent, int index) {
+  Widget _buildThumbItem(int index) {
+    final image = widget.capturedImages[index];
     return GestureDetector(
-      onTap: () => removeImage(index),
+      onTap: () => widget.onRemoveImage(index),
       child: Container(
         width: 44,
         height: 58,
@@ -360,16 +376,20 @@ class _ScannerPageState extends State<ScannerPage> {
         ),
         child: Stack(
           children: [
-            if (_capturedImages[index].path.isNotEmpty)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.file(
-                  _capturedImages[index],
-                  width: 44,
-                  height: 58,
-                  fit: BoxFit.cover,
-                ),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.file(
+                image,
+                width: 44,
+                height: 58,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return const Center(
+                    child: Icon(Icons.image, color: Colors.white54, size: 20),
+                  );
+                },
               ),
+            ),
             Positioned(
               bottom: 3,
               right: 3,

@@ -142,6 +142,8 @@ class _MainScreenState extends State<MainScreen> {
       return ScannerPage(
         cameraController: appState.cameraService.controller,
         isCameraInitialized: appState.cameraInitialized,
+        capturedImages: appState.capturedImages,
+        onRemoveImage: (index) => appState.removeCapturedImage(index),
         onCancel: () async {
           appState.clearCapturedImages();
           await appState.disposeCamera();
