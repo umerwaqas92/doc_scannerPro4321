@@ -3,8 +3,10 @@ import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'widgets/status_bar.dart';
 import 'widgets/bottom_nav.dart';
+import 'pages/splash_screen.dart';
 import 'pages/home_page.dart';
 import 'pages/scanner_page.dart';
+import 'pages/scan_result_page.dart';
 import 'pages/doc_view_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
@@ -45,29 +47,25 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   bool _showScanner = false;
-  bool _cameraInitializing = false;
+  bool _showResult = false;
+  bool _showSplash = true;
 
   void _onNavTap(int index) {
     setState(() {
       _currentIndex = index;
       _showScanner = false;
+      _showResult = false;
     });
   }
 
   void _onScanTap() async {
     setState(() {
       _showScanner = true;
-      _cameraInitializing = true;
+      _showResult = false;
     });
 
     final appState = context.read<AppState>();
     await appState.initializeCamera();
-
-    if (mounted) {
-      setState(() {
-        _cameraInitializing = false;
-      });
-    }
   }
 
   void _onDocTap(int docIndex) {
@@ -86,16 +84,83 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  void _onScannerCapture() async {
+    final appState = context.read<AppState>();
+    await appState.captureImage();
+  }
+
+  void _onScannerAddFromGallery() async {
+    final appState = context.read<AppState>();
+    await appState.addImageFromGallery();
+  }
+
   void _onScannerDone() async {
     final appState = context.read<AppState>();
-    await appState.saveDocument('Scan');
     await appState.disposeCamera();
-    if (mounted) {
+
+    if (appState.capturedImages.isNotEmpty) {
       setState(() {
         _showScanner = false;
-        _currentIndex = 0;
+        _showResult = true;
       });
     }
+  }
+
+  void _onScannerCancel() async {
+    final appState = context.read<AppState>();
+    appState.clearCapturedImages();
+    await appState.disposeCamera();
+
+    setState(() {
+      _showScanner = false;
+    });
+  }
+
+  void _onResultRetry() async {
+    final appState = context.read<AppState>();
+    appState.clearCapturedImages();
+
+    setState(() {
+      _showResult = false;
+      _showScanner = true;
+    });
+
+    await appState.initializeCamera();
+  }
+
+  void _onResultSave() async {
+    final appState = context.read<AppState>();
+    await appState.saveDocument('Scan');
+
+    setState(() {
+      _showResult = false;
+      _currentIndex = 0;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Document saved successfully!'),
+          backgroundColor: AppColors.green,
+        ),
+      );
+    }
+  }
+
+  void _onResultBack() {
+    setState(() {
+      _showResult = false;
+    });
+  }
+
+  void _onResultAddMore() async {
+    final appState = context.read<AppState>();
+    await appState.addImageFromGallery();
+  }
+
+  void _onResultRemoveImage(int index) {
+    final appState = context.read<AppState>();
+    appState.removeCapturedImage(index);
   }
 
   void _onDocViewBack() {
@@ -109,10 +174,15 @@ class _MainScreenState extends State<MainScreen> {
   Widget build(BuildContext context) {
     return Consumer<AppState>(
       builder: (context, appState, child) {
-        if (appState.isLoading) {
-          return const Scaffold(
-            backgroundColor: AppColors.bg,
-            body: Center(child: CircularProgressIndicator()),
+        if (appState.isLoading || _showSplash) {
+          return SplashScreen(
+            onComplete: () {
+              if (mounted) {
+                setState(() {
+                  _showSplash = false;
+                });
+              }
+            },
           );
         }
 
@@ -121,9 +191,9 @@ class _MainScreenState extends State<MainScreen> {
           body: SafeArea(
             child: Column(
               children: [
-                if (!_showScanner) const StatusBarWidget(),
+                if (!_showScanner && !_showResult) const StatusBarWidget(),
                 Expanded(child: _buildCurrentPage(appState)),
-                if (!_showScanner)
+                if (!_showScanner && !_showResult)
                   BottomNavWidget(
                     currentIndex: _currentIndex > 4 ? 0 : _currentIndex,
                     onTap: _onNavTap,
@@ -138,29 +208,33 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildCurrentPage(AppState appState) {
+    // Scanner Page
     if (_showScanner) {
       return ScannerPage(
         cameraController: appState.cameraService.controller,
         isCameraInitialized: appState.cameraInitialized,
         capturedImages: appState.capturedImages,
         onRemoveImage: (index) => appState.removeCapturedImage(index),
-        onCancel: () async {
-          appState.clearCapturedImages();
-          await appState.disposeCamera();
-          if (mounted) {
-            setState(() => _showScanner = false);
-          }
-        },
+        onCancel: _onScannerCancel,
         onDone: _onScannerDone,
-        onCapture: () async {
-          await appState.captureImage();
-        },
-        onAddFromGallery: () async {
-          await appState.addImageFromGallery();
-        },
+        onCapture: _onScannerCapture,
+        onAddFromGallery: _onScannerAddFromGallery,
       );
     }
 
+    // Result Page
+    if (_showResult) {
+      return ScanResultPage(
+        scannedImages: appState.capturedImages,
+        onRetry: _onResultRetry,
+        onSave: _onResultSave,
+        onBack: _onResultBack,
+        onRemoveImage: _onResultRemoveImage,
+        onAddMore: _onResultAddMore,
+      );
+    }
+
+    // Regular pages
     switch (_currentIndex) {
       case 0:
         return HomePage(
@@ -182,11 +256,7 @@ class _MainScreenState extends State<MainScreen> {
           document: appState.selectedDocument,
           onBack: _onDocViewBack,
           onMoreTap: () {},
-          onSave: () async {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Document saved!')));
-          },
+          onSave: () {},
           onShare: () {},
           onOcr: () {},
           onEdit: () {},
@@ -222,11 +292,7 @@ class _MainScreenState extends State<MainScreen> {
           document: appState.selectedDocument,
           onBack: _onDocViewBack,
           onMoreTap: () {},
-          onSave: () async {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('Document saved!')));
-          },
+          onSave: () {},
           onShare: () {},
           onOcr: () {},
           onEdit: () {},
