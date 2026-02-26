@@ -45,6 +45,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   bool _showScanner = false;
+  bool _cameraInitializing = false;
 
   void _onNavTap(int index) {
     setState(() {
@@ -53,10 +54,20 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  void _onScanTap() {
+  void _onScanTap() async {
     setState(() {
       _showScanner = true;
+      _cameraInitializing = true;
     });
+
+    final appState = context.read<AppState>();
+    await appState.initializeCamera();
+
+    if (mounted) {
+      setState(() {
+        _cameraInitializing = false;
+      });
+    }
   }
 
   void _onDocTap(int docIndex) {
@@ -78,10 +89,13 @@ class _MainScreenState extends State<MainScreen> {
   void _onScannerDone() async {
     final appState = context.read<AppState>();
     await appState.saveDocument('Scan');
-    setState(() {
-      _showScanner = false;
-      _currentIndex = 0;
-    });
+    await appState.disposeCamera();
+    if (mounted) {
+      setState(() {
+        _showScanner = false;
+        _currentIndex = 0;
+      });
+    }
   }
 
   void _onDocViewBack() {
@@ -126,10 +140,14 @@ class _MainScreenState extends State<MainScreen> {
   Widget _buildCurrentPage(AppState appState) {
     if (_showScanner) {
       return ScannerPage(
-        onCancel: () {
+        cameraController: appState.cameraService.controller,
+        isCameraInitialized: appState.cameraInitialized,
+        onCancel: () async {
           appState.clearCapturedImages();
-          appState.disposeCamera();
-          setState(() => _showScanner = false);
+          await appState.disposeCamera();
+          if (mounted) {
+            setState(() => _showScanner = false);
+          }
         },
         onDone: _onScannerDone,
         onCapture: () async {
