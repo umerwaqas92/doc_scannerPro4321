@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=375, maximum-scale=1.0" />
+  <title>DocScan – Document Scanner</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f5f5f0;
+      --surface: #ffffff;
+      --surface2: #f0efea;
+      --border: #e2e1db;
+      --text: #1a1a18;
+      --text2: #6b6b65;
+      --text3: #a0a09a;
+      --accent: #1a1a18;
+      --accent-soft: #e8e8e3;
+      --green: #2d6a4f;
+      --green-bg: #d8f3dc;
+      --radius: 18px;
+      --radius-sm: 10px;
+      --shadow: 0 2px 12px rgba(0,0,0,0.06);
+      --shadow-lg: 0 8px 32px rgba(0,0,0,0.10);
+    }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #d0cfca;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 24px 12px;
+    }
+
+    /* ── Phone Shell ── */
+    .phone {
+      width: 375px;
+      min-height: 812px;
+      background: var(--bg);
+      border-radius: 44px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.22), inset 0 0 0 1px rgba(255,255,255,0.5);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Status Bar ── */
+    .status-bar {
+      background: var(--bg);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 28px 6px;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .status-bar .time { font-size: 15px; font-weight: 600; }
+    .status-icons { display: flex; gap: 6px; align-items: center; }
+    .status-icons svg { width: 16px; height: 16px; fill: var(--text); }
+
+    /* ── Screen Container ── */
+    .screen { flex: 1; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; }
+    .screen::-webkit-scrollbar { display: none; }
+
+    /* ── PAGE: Home ── */
+    .page { display: none; flex-direction: column; }
+    .page.active { display: flex; }
+
+    /* Header */
+    .app-header {
+      background: var(--bg);
+      padding: 10px 24px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .app-title { font-size: 26px; font-weight: 600; color: var(--text); letter-spacing: -0.5px; }
+    .header-actions { display: flex; gap: 10px; }
+    .icon-btn {
+      width: 40px; height: 40px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .icon-btn:active { background: var(--accent-soft); }
+    .icon-btn svg { width: 20px; height: 20px; stroke: var(--text); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* Scan CTA Banner */
+    .scan-banner {
+      margin: 0 20px 20px;
+      background: var(--text);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .scan-banner:active { transform: scale(0.98); }
+    .scan-banner-text h3 { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+    .scan-banner-text p { font-size: 13px; color: rgba(255,255,255,0.6); }
+    .scan-banner-icon {
+      width: 52px; height: 52px;
+      background: rgba(255,255,255,0.12);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .scan-banner-icon svg { width: 26px; height: 26px; stroke: #fff; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* Quick Actions */
+    .section-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text2);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 0 24px 10px;
+    }
+    .quick-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      padding: 0 20px 24px;
+    }
+    .quick-action {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .quick-action:active { background: var(--accent-soft); }
+    .quick-action svg { width: 22px; height: 22px; stroke: var(--text); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .quick-action span { font-size: 11px; font-weight: 500; color: var(--text2); text-align: center; line-height: 1.2; }
+
+    /* Recent Docs */
+    .recent-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 24px 12px;
+    }
+    .recent-header .see-all { font-size: 13px; color: var(--text2); font-weight: 500; cursor: pointer; }
+
+    .doc-list { padding: 0 20px 20px; display: flex; flex-direction: column; gap: 10px; }
+    .doc-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .doc-card:active { background: var(--surface2); }
+    .doc-thumb {
+      width: 44px; height: 56px;
+      background: var(--surface2);
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    .doc-thumb svg { width: 22px; height: 22px; stroke: var(--text3); fill: none; stroke-width: 1.5; }
+    .doc-info { flex: 1; min-width: 0; }
+    .doc-name { font-size: 14px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .doc-meta { font-size: 12px; color: var(--text3); margin-top: 3px; }
+    .doc-badge {
+      font-size: 10px;
+      font-family: 'DM Mono', monospace;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--surface2);
+      color: var(--text2);
+      border: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .doc-badge.pdf { background: #fdecea; color: #c0392b; border-color: #f5c0bb; }
+    .doc-badge.jpg { background: #e8f4fd; color: #2471a3; border-color: #b9d8f0; }
+
+    /* ── PAGE: Scanner ── */
+    .scanner-page { background: #111; min-height: 812px; }
+    .scanner-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 20px;
+    }
+    .scanner-header button {
+      background: rgba(255,255,255,0.12);
+      border: none;
+      border-radius: 10px;
+      padding: 8px 16px;
+      color: #fff;
+      font-size: 14px;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .scanner-title { font-size: 16px; font-weight: 600; color: #fff; }
+
+    .viewfinder {
+      margin: 0 20px;
+      background: #000;
+      border-radius: 16px;
+      height: 380px;
+      position: relative;
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .vf-bg {
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+    }
+    /* Document outline simulation */
+    .doc-outline {
+      position: absolute;
+      width: 220px; height: 290px;
+      border: 2px solid rgba(255,255,255,0.85);
+      border-radius: 4px;
+      box-shadow: 0 0 0 2000px rgba(0,0,0,0.45);
+      animation: pulse-border 2s ease-in-out infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 2000px rgba(0,0,0,0.45), 0 0 16px rgba(255,255,255,0.15); }
+      50% { box-shadow: 0 0 0 2000px rgba(0,0,0,0.45), 0 0 28px rgba(255,255,255,0.30); }
+    }
+    /* Corner handles */
+    .corner {
+      position: absolute;
+      width: 18px; height: 18px;
+      border-color: #fff;
+      border-style: solid;
+    }
+    .corner.tl { top: -1px; left: -1px; border-width: 3px 0 0 3px; border-radius: 2px 0 0 0; }
+    .corner.tr { top: -1px; right: -1px; border-width: 3px 3px 0 0; border-radius: 0 2px 0 0; }
+    .corner.bl { bottom: -1px; left: -1px; border-width: 0 0 3px 3px; border-radius: 0 0 0 2px; }
+    .corner.br { bottom: -1px; right: -1px; border-width: 0 3px 3px 0; border-radius: 0 0 2px 0; }
+
+    /* Scan line */
+    .scan-line {
+      position: absolute;
+      left: 2px; right: 2px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.9), transparent);
+      animation: scanline 2s ease-in-out infinite;
+    }
+    @keyframes scanline {
+      0% { top: 4px; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { top: calc(100% - 6px); opacity: 0; }
+    }
+
+    .vf-tip {
+      position: absolute;
+      bottom: 14px;
+      left: 0; right: 0;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.5);
+    }
+
+    /* Filter strip */
+    .filter-strip {
+      display: flex; gap: 10px;
+      padding: 16px 20px;
+      overflow-x: auto;
+    }
+    .filter-strip::-webkit-scrollbar { display: none; }
+    .filter-chip {
+      flex-shrink: 0;
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid rgba(255,255,255,0.18);
+      color: rgba(255,255,255,0.65);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-chip.active {
+      background: #fff;
+      color: #111;
+      border-color: #fff;
+    }
+
+    /* Capture controls */
+    .capture-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      padding: 10px 40px 24px;
+    }
+    .ctrl-btn {
+      width: 48px; height: 48px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+    }
+    .ctrl-btn svg { width: 22px; height: 22px; stroke: #fff; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .capture-btn {
+      width: 72px; height: 72px;
+      background: #fff;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 0 0 5px rgba(255,255,255,0.2);
+      transition: transform 0.15s;
+    }
+    .capture-btn:active { transform: scale(0.93); }
+    .capture-btn-inner {
+      width: 56px; height: 56px;
+      background: #fff;
+      border-radius: 50%;
+      border: 3px solid #111;
+    }
+
+    /* Thumbnail strip at bottom */
+    .thumb-strip {
+      display: flex; gap: 8px;
+      padding: 8px 20px 16px;
+      overflow-x: auto;
+    }
+    .thumb-strip::-webkit-scrollbar { display: none; }
+    .thumb-item {
+      width: 44px; height: 58px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      border: 1.5px solid rgba(255,255,255,0.12);
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb-item.add-more {
+      background: transparent;
+      border: 1.5px dashed rgba(255,255,255,0.2);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .thumb-item.add-more svg { width: 18px; height: 18px; stroke: rgba(255,255,255,0.3); fill: none; stroke-width: 1.8; }
+    .thumb-badge {
+      position: absolute; bottom: 3px; right: 3px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 9px;
+      font-family: 'DM Mono', monospace;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    /* ── PAGE: Document View ── */
+    .docview-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 20px 14px;
+      background: var(--bg);
+    }
+    .docview-title { font-size: 17px; font-weight: 600; color: var(--text); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .doc-preview-area {
+      background: #e0dfd9;
+      margin: 0 20px 16px;
+      border-radius: var(--radius);
+      height: 400px;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .doc-preview-sheet {
+      width: 220px; height: 310px;
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: var(--shadow-lg);
+      display: flex; flex-direction: column;
+      padding: 20px;
+      gap: 10px;
+    }
+    .doc-line { height: 8px; background: #f0f0ee; border-radius: 4px; }
+    .doc-line.short { width: 60%; }
+    .doc-line.title { height: 12px; width: 70%; background: #e0dfda; border-radius: 4px; }
+    .doc-line.medium { width: 85%; }
+
+    .doc-actions-bar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 0 20px 16px;
+    }
+    .action-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 6px;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .action-tile:active { background: var(--accent-soft); }
+    .action-tile svg { width: 20px; height: 20px; stroke: var(--text); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .action-tile span { font-size: 10px; font-weight: 500; color: var(--text2); text-align: center; }
+
+    .doc-info-card {
+      margin: 0 20px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px 16px;
+    }
+    .info-row { display: flex; justify-content: space-between; padding: 6px 0; }
+    .info-row + .info-row { border-top: 1px solid var(--border); }
+    .info-label { font-size: 13px; color: var(--text3); }
+    .info-value { font-size: 13px; font-weight: 500; color: var(--text); font-family: 'DM Mono', monospace; }
+
+    /* ── PAGE: Gallery / All Docs ── */
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 0 20px 24px;
+    }
+    .gallery-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+    .gallery-card:active { transform: scale(0.97); }
+    .gallery-thumb {
+      background: var(--surface2);
+      height: 120px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .gallery-thumb svg { width: 32px; height: 32px; stroke: var(--border); fill: none; stroke-width: 1.5; }
+    .gallery-info { padding: 10px 12px; }
+    .gallery-name { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .gallery-date { font-size: 11px; color: var(--text3); }
+
+    /* ── PAGE: Settings ── */
+    .settings-section { margin: 0 20px 20px; }
+    .settings-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text3);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      padding-left: 4px;
+    }
+    .settings-group {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+    }
+    .settings-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px;
+      cursor: pointer;
+    }
+    .settings-row + .settings-row { border-top: 1px solid var(--border); }
+    .settings-row-left { display: flex; align-items: center; gap: 12px; }
+    .settings-row-icon {
+      width: 34px; height: 34px;
+      background: var(--surface2);
+      border-radius: 9px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .settings-row-icon svg { width: 16px; height: 16px; stroke: var(--text); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .settings-row-label { font-size: 14px; font-weight: 500; color: var(--text); }
+    .settings-row-sub { font-size: 12px; color: var(--text3); }
+    .settings-row-right { display: flex; align-items: center; gap: 8px; }
+    .settings-row-value { font-size: 13px; color: var(--text2); }
+    .chevron { width: 16px; height: 16px; stroke: var(--text3); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* Toggle */
+    .toggle {
+      width: 44px; height: 26px;
+      background: var(--border);
+      border-radius: 13px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle.on { background: var(--text); }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 20px; height: 20px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    }
+    .toggle.on::after { transform: translateX(18px); }
+
+    /* ── Bottom Nav ── */
+    .bottom-nav {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      padding: 10px 0 20px;
+    }
+    .nav-item {
+      flex: 1;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 4px;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+    .nav-item svg { width: 22px; height: 22px; stroke: var(--text3); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.15s; }
+    .nav-item span { font-size: 10px; font-weight: 500; color: var(--text3); transition: color 0.15s; }
+    .nav-item.active svg { stroke: var(--text); }
+    .nav-item.active span { color: var(--text); }
+
+    /* Scan fab in nav */
+    .nav-scan {
+      flex: 1;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 4px;
+      cursor: pointer;
+      padding: 4px 0;
+    }
+    .nav-scan-circle {
+      width: 48px; height: 48px;
+      background: var(--text);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin-top: -24px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      transition: transform 0.15s;
+    }
+    .nav-scan-circle:active { transform: scale(0.93); }
+    .nav-scan-circle svg { width: 22px; height: 22px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .nav-scan span { font-size: 10px; font-weight: 500; color: var(--text3); }
+
+    /* ── Utility ── */
+    .page-scroll { overflow-y: auto; height: 100%; }
+  </style>
+</head>
+<body>
+
+<div class="phone">
+  <!-- Status Bar -->
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg viewBox="0 0 24 24"><path d="M1 6c0 0 5-4 11-4s11 4 11 4"/><path d="M5 10c0 0 3-3 7-3s7 3 7 3"/><path d="M9 14c0 0 1-1 3-1s3 1 3 1"/><circle cx="12" cy="18" r="1" fill="currentColor"/></svg>
+      <svg viewBox="0 0 24 24"><rect x="2" y="7" width="16" height="10" rx="2" stroke-width="1.8"/><path d="M20 11v2" stroke-width="2.5" stroke-linecap="round"/><rect x="3" y="8" width="8" height="8" rx="1" fill="currentColor" stroke="none"/></svg>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ PAGE: HOME ═══════════════════════════ -->
+  <div class="screen page active" id="page-home">
+    <div class="app-header">
+      <span class="app-title">DocScan</span>
+      <div class="header-actions">
+        <div class="icon-btn">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        </div>
+        <div class="icon-btn">
+          <svg viewBox="0 0 24 24"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scan CTA -->
+    <div class="scan-banner" onclick="navigate('scanner')">
+      <div class="scan-banner-text">
+        <h3>Scan Document</h3>
+        <p>Tap to open camera scanner</p>
+      </div>
+      <div class="scan-banner-icon">
+        <svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="section-label">Tools</div>
+    <div class="quick-actions">
+      <div class="quick-action">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+        <span>PDF</span>
+      </div>
+      <div class="quick-action">
+        <svg viewBox="0 0 24 24"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        <span>OCR Text</span>
+      </div>
+      <div class="quick-action">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span>Share</span>
+      </div>
+      <div class="quick-action">
+        <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        <span>Compress</span>
+      </div>
+    </div>
+
+    <!-- Recent -->
+    <div class="recent-header">
+      <div class="section-label" style="padding:0;">Recent</div>
+      <span class="see-all" onclick="navigate('gallery')">See all</span>
+    </div>
+    <div class="doc-list">
+      <div class="doc-card" onclick="navigate('docview')">
+        <div class="doc-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="doc-info">
+          <div class="doc-name">Project_Brief.pdf</div>
+          <div class="doc-meta">Today · 2 pages · 1.4 MB</div>
+        </div>
+        <span class="doc-badge pdf">PDF</span>
+      </div>
+      <div class="doc-card" onclick="navigate('docview')">
+        <div class="doc-thumb">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        </div>
+        <div class="doc-info">
+          <div class="doc-name">Invoice_March.pdf</div>
+          <div class="doc-meta">Yesterday · 1 page · 0.8 MB</div>
+        </div>
+        <span class="doc-badge pdf">PDF</span>
+      </div>
+      <div class="doc-card" onclick="navigate('docview')">
+        <div class="doc-thumb">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <div class="doc-info">
+          <div class="doc-name">ID_Scan_Front.jpg</div>
+          <div class="doc-meta">Feb 22 · 1 page · 2.1 MB</div>
+        </div>
+        <span class="doc-badge jpg">JPG</span>
+      </div>
+      <div class="doc-card" onclick="navigate('docview')">
+        <div class="doc-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="doc-info">
+          <div class="doc-name">Contract_Final.pdf</div>
+          <div class="doc-meta">Feb 20 · 5 pages · 3.2 MB</div>
+        </div>
+        <span class="doc-badge pdf">PDF</span>
+      </div>
+    </div>
+  </div><!-- /page-home -->
+
+  <!-- ═══════════════════════════ PAGE: SCANNER ═══════════════════════════ -->
+  <div class="page scanner-page" id="page-scanner" style="flex-direction:column; background:#111; min-height:100%">
+    <div class="scanner-header">
+      <button onclick="navigate('home')">✕ Cancel</button>
+      <span class="scanner-title">Scan Document</span>
+      <button onclick="navigate('docview')">Done</button>
+    </div>
+
+    <!-- Viewfinder -->
+    <div class="viewfinder">
+      <div class="vf-bg"></div>
+      <div class="doc-outline">
+        <div class="corner tl"></div>
+        <div class="corner tr"></div>
+        <div class="corner bl"></div>
+        <div class="corner br"></div>
+        <div class="scan-line"></div>
+      </div>
+      <div class="vf-tip">Align document within frame</div>
+    </div>
+
+    <!-- Filter Strip -->
+    <div class="filter-strip">
+      <div class="filter-chip active">Auto</div>
+      <div class="filter-chip">B&W</div>
+      <div class="filter-chip">Color</div>
+      <div class="filter-chip">Grayscale</div>
+      <div class="filter-chip">Photo</div>
+    </div>
+
+    <!-- Capture Controls -->
+    <div class="capture-controls">
+      <div class="ctrl-btn">
+        <svg viewBox="0 0 24 24"><path d="M4 14.899A7 7 0 1 1 15.5 9H17a5 5 0 0 1 0 10H5a5 5 0 0 1-1-9.9"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+      </div>
+      <div class="capture-btn">
+        <div class="capture-btn-inner"></div>
+      </div>
+      <div class="ctrl-btn">
+        <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </div>
+    </div>
+
+    <!-- Thumbnail Strip -->
+    <div class="thumb-strip">
+      <div class="thumb-item" style="background:#2a2a28">
+        <div class="thumb-badge">1</div>
+      </div>
+      <div class="thumb-item add-more">
+        <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ PAGE: DOC VIEW ═══════════════════════════ -->
+  <div class="page" id="page-docview" style="flex-direction:column">
+    <div class="docview-header">
+      <div class="icon-btn" onclick="navigate('home')" style="border:none; background:transparent; width:auto;">
+        <svg viewBox="0 0 24 24" width="22" height="22" style="stroke:var(--text2); fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round"><polyline points="15 18 9 12 15 6"/></svg>
+      </div>
+      <span class="docview-title">Project_Brief.pdf</span>
+      <div class="icon-btn">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+      </div>
+    </div>
+
+    <!-- Preview -->
+    <div class="doc-preview-area">
+      <div class="doc-preview-sheet">
+        <div class="doc-line title"></div>
+        <div class="doc-line short"></div>
+        <div style="height:8px"></div>
+        <div class="doc-line medium"></div>
+        <div class="doc-line"></div>
+        <div class="doc-line medium"></div>
+        <div class="doc-line short" style="width:40%"></div>
+        <div style="height:6px"></div>
+        <div class="doc-line medium"></div>
+        <div class="doc-line"></div>
+        <div class="doc-line short" style="width:75%"></div>
+        <div class="doc-line medium"></div>
+        <div style="height:4px"></div>
+        <div class="doc-line short" style="width:50%"></div>
+        <div class="doc-line"></div>
+      </div>
+    </div>
+
+    <!-- Action Tiles -->
+    <div class="doc-actions-bar">
+      <div class="action-tile">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>Save</span>
+      </div>
+      <div class="action-tile">
+        <svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        <span>Share</span>
+      </div>
+      <div class="action-tile">
+        <svg viewBox="0 0 24 24"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        <span>OCR</span>
+      </div>
+      <div class="action-tile">
+        <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        <span>Edit</span>
+      </div>
+    </div>
+
+    <!-- Info Card -->
+    <div class="doc-info-card">
+      <div class="info-row">
+        <span class="info-label">Type</span>
+        <span class="info-value">PDF</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Pages</span>
+        <span class="info-value">2</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Size</span>
+        <span class="info-value">1.4 MB</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label">Scanned</span>
+        <span class="info-value">Today 09:41</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ PAGE: GALLERY ═══════════════════════════ -->
+  <div class="page" id="page-gallery" style="flex-direction:column">
+    <div class="app-header">
+      <span class="app-title">All Docs</span>
+      <div class="header-actions">
+        <div class="icon-btn">
+          <svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </div>
+      </div>
+    </div>
+    <div class="gallery-grid">
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">Project_Brief.pdf</div>
+          <div class="gallery-date">Today</div>
+        </div>
+      </div>
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">Invoice_March.pdf</div>
+          <div class="gallery-date">Yesterday</div>
+        </div>
+      </div>
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">ID_Scan_Front.jpg</div>
+          <div class="gallery-date">Feb 22</div>
+        </div>
+      </div>
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">Contract_Final.pdf</div>
+          <div class="gallery-date">Feb 20</div>
+        </div>
+      </div>
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">Passport_Copy.pdf</div>
+          <div class="gallery-date">Feb 15</div>
+        </div>
+      </div>
+      <div class="gallery-card" onclick="navigate('docview')">
+        <div class="gallery-thumb">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <div class="gallery-info">
+          <div class="gallery-name">Receipt_Shop.jpg</div>
+          <div class="gallery-date">Feb 12</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ PAGE: SETTINGS ═══════════════════════════ -->
+  <div class="page" id="page-settings" style="flex-direction:column">
+    <div class="app-header">
+      <span class="app-title">Settings</span>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Scan</div>
+      <div class="settings-group">
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+            </div>
+            <div>
+              <div class="settings-row-label">Auto Crop</div>
+              <div class="settings-row-sub">Detect edges automatically</div>
+            </div>
+          </div>
+          <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            </div>
+            <div>
+              <div class="settings-row-label">Flash Mode</div>
+            </div>
+          </div>
+          <div class="settings-row-right">
+            <span class="settings-row-value">Auto</span>
+            <svg class="chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14,2 14,8 20,8"/></svg>
+            </div>
+            <div>
+              <div class="settings-row-label">Default Format</div>
+            </div>
+          </div>
+          <div class="settings-row-right">
+            <span class="settings-row-value">PDF</span>
+            <svg class="chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Storage</div>
+      <div class="settings-group">
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><path d="M4 14.899A7 7 0 1 1 15.5 9H17a5 5 0 0 1 0 10H5a5 5 0 0 1-1-9.9"/></svg>
+            </div>
+            <div>
+              <div class="settings-row-label">Cloud Backup</div>
+              <div class="settings-row-sub">Auto-save to cloud</div>
+            </div>
+          </div>
+          <div class="toggle" onclick="this.classList.toggle('on')"></div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </div>
+            <div>
+              <div class="settings-row-label">Storage Used</div>
+            </div>
+          </div>
+          <div class="settings-row-right">
+            <span class="settings-row-value">48 MB</span>
+            <svg class="chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Account</div>
+      <div class="settings-group">
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/></svg>
+            </div>
+            <div><div class="settings-row-label">Profile</div></div>
+          </div>
+          <div class="settings-row-right">
+            <svg class="chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="settings-row-left">
+            <div class="settings-row-icon">
+              <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div><div class="settings-row-label">Privacy & Security</div></div>
+          </div>
+          <div class="settings-row-right">
+            <svg class="chevron" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════ BOTTOM NAV ═══════════════════════════ -->
+  <div class="bottom-nav" id="bottom-nav">
+    <div class="nav-item active" id="nav-home" onclick="navigate('home')">
+      <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span>Home</span>
+    </div>
+    <div class="nav-item" id="nav-gallery" onclick="navigate('gallery')">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      <span>Docs</span>
+    </div>
+    <div class="nav-scan" onclick="navigate('scanner')">
+      <div class="nav-scan-circle">
+        <svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+      </div>
+      <span>Scan</span>
+    </div>
+    <div class="nav-item" id="nav-ocr" onclick="navigate('home')">
+      <svg viewBox="0 0 24 24"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+      <span>OCR</span>
+    </div>
+    <div class="nav-item" id="nav-settings" onclick="navigate('settings')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Settings</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  const pages = { home:'page-home', scanner:'page-scanner', docview:'page-docview', gallery:'page-gallery', settings:'page-settings' };
+  const navMap = { home:'nav-home', gallery:'nav-gallery', settings:'nav-settings' };
+  const hideNav = ['scanner'];
+
+  function navigate(to) {
+    Object.values(pages).forEach(id => {
+      const el = document.getElementById(id);
+      el.classList.remove('active');
+      el.style.display = 'none';
+    });
+    const target = document.getElementById(pages[to]);
+    target.style.display = 'flex';
+    target.classList.add('active');
+
+    // Nav bar
+    const nav = document.getElementById('bottom-nav');
+    nav.style.display = hideNav.includes(to) ? 'none' : 'flex';
+
+    // Active nav item
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    if (navMap[to]) document.getElementById(navMap[to]).classList.add('active');
+
+    // Scroll to top
+    target.scrollTop = 0;
+  }
+
+  // Filter chip toggle in scanner
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
