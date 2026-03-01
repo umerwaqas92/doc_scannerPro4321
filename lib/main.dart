@@ -84,12 +84,12 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  void _onScannerCapture() async {
+  Future<void> _onScannerCapture() async {
     final appState = context.read<AppState>();
     await appState.captureImage();
   }
 
-  void _onScannerAddFromGallery() async {
+  Future<void> _onScannerAddFromGallery() async {
     final appState = context.read<AppState>();
     await appState.addImageFromGallery();
   }
@@ -213,7 +213,6 @@ class _MainScreenState extends State<MainScreen> {
       return ScannerPage(
         cameraController: appState.cameraService.controller,
         isCameraInitialized: appState.cameraInitialized,
-        cameraErrorMessage: appState.cameraService.errorMessage,
         capturedImages: appState.capturedImages,
         onRemoveImage: (index) => appState.removeCapturedImage(index),
         onCancel: _onScannerCancel,

@@ -75,22 +75,38 @@ class AppState extends ChangeNotifier {
   Future<File?> captureImage() async {
     debugPrint('AppState: captureImage called');
     final image = await _cameraService.captureImage();
-    debugPrint('AppState: image captured, processing...');
+    debugPrint('AppState: image captured, processing background...');
+    
     if (image != null) {
-      // Apply all scanner enhancements
+      // Step 1: Add the raw image to the list immediately for instant UI feedback
+      _capturedImages.add(image);
+      notifyListeners(); // This makes the thumbnail appear instantly
+      
+      // Step 2: Process the image in the background without blocking the capture flow
+      // We'll replace the raw image in the list once it's enhanced
+      _processImageInBackgroundAsync(image);
+    }
+    return image;
+  }
+
+  Future<void> _processImageInBackgroundAsync(File image) async {
+    try {
       final processedImage = await _documentScannerService.processDocument(
         image,
         autoEnhance: true,
       );
-      if (processedImage != null) {
-        _capturedImages.add(processedImage);
-        debugPrint('AppState: processed image added to capturedImages');
-      } else {
-        _capturedImages.add(image);
+      
+      if (processedImage != null && processedImage.path != image.path) {
+        final index = _capturedImages.indexOf(image);
+        if (index != -1) {
+          _capturedImages[index] = processedImage;
+          debugPrint('AppState: Raw image replaced with processed version');
+          notifyListeners();
+        }
       }
-      notifyListeners();
+    } catch (e) {
+      debugPrint('AppState: Background processing error: $e');
     }
-    return image;
   }
 
   Future<void> addImageFromGallery() async {

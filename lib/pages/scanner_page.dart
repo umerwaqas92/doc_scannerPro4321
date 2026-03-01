@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../theme/app_theme.dart';
-import '../models/scanner_steps.dart';
 
 class ScannerPage extends StatefulWidget {
   final VoidCallback onCancel;
@@ -15,8 +14,6 @@ class ScannerPage extends StatefulWidget {
   final List<File> capturedImages;
   final Function(int) onRemoveImage;
 
-  final String? cameraErrorMessage;
-
   const ScannerPage({
     super.key,
     required this.onCancel,
@@ -27,105 +24,17 @@ class ScannerPage extends StatefulWidget {
     required this.isCameraInitialized,
     required this.capturedImages,
     required this.onRemoveImage,
-    this.cameraErrorMessage,
   });
 
   @override
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScannerPageState extends State<ScannerPage>
-    with TickerProviderStateMixin {
+class _ScannerPageState extends State<ScannerPage> {
   int _selectedFilter = 0;
   final List<String> _filters = ['Auto', 'B&W', 'Color', 'Grayscale', 'Photo'];
 
   bool _isScanning = false;
-  ScannerStep _currentStep = ScannerStep.preScanPrep;
-  bool _didReachScanningStep = false;
-
-  late AnimationController _scanLineController;
-  late AnimationController _captureFlashController;
-  late Animation<double> _scanLineAnimation;
-  late Animation<double> _flashAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentStep = ScannerStep.initialization;
-
-    _scanLineController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    );
-
-    _captureFlashController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 300),
-    );
-
-    _scanLineAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _scanLineController, curve: Curves.easeInOut),
-    );
-
-    _flashAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _captureFlashController, curve: Curves.easeOut),
-    );
-
-    _scanLineController.repeat();
-  }
-
-  @override
-  void didUpdateWidget(ScannerPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isCameraInitialized && !_didReachScanningStep) {
-      _didReachScanningStep = true;
-      setState(() => _currentStep = ScannerStep.scanning);
-    }
-  }
-
-  @override
-  void dispose() {
-    _scanLineController.dispose();
-    _captureFlashController.dispose();
-    super.dispose();
-  }
-
-  void _onCapture() {
-    debugPrint('Capture button pressed, isScanning: $_isScanning');
-    if (_isScanning) return;
-
-    setState(() {
-      _isScanning = true;
-      _currentStep = ScannerStep.adConversion;
-    });
-
-    _captureFlashController.forward(from: 0);
-    debugPrint('Starting capture process...');
-
-    Future.delayed(const Duration(milliseconds: 280), () {
-      if (!mounted) return;
-      setState(() => _currentStep = ScannerStep.imageProcessing);
-    });
-    Future.delayed(const Duration(milliseconds: 180), () {
-      if (!mounted) return;
-      widget.onCapture();
-    });
-    Future.delayed(const Duration(milliseconds: 400), () {
-      if (!mounted) return;
-      setState(() => _currentStep = ScannerStep.imageFormation);
-    });
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (!mounted) return;
-      setState(() => _currentStep = ScannerStep.postScan);
-      Future.delayed(const Duration(milliseconds: 700), () {
-        if (!mounted) return;
-        setState(() {
-          _isScanning = false;
-          _currentStep = ScannerStep.scanning;
-        });
-      });
-    });
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +45,6 @@ class _ScannerPageState extends State<ScannerPage>
           Column(
             children: [
               _buildHeader(),
-              _buildStepIndicator(),
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
@@ -151,19 +59,6 @@ class _ScannerPageState extends State<ScannerPage>
                 ),
               ),
             ],
-          ),
-          IgnorePointer(
-            ignoring: true,
-            child: AnimatedBuilder(
-              animation: _flashAnimation,
-              builder: (context, child) {
-                return Container(
-                  color: Colors.white.withValues(
-                    alpha: _flashAnimation.value * 0.5,
-                  ),
-                );
-              },
-            ),
           ),
           if (_isScanning) _buildScanningOverlay(),
         ],
@@ -189,53 +84,6 @@ class _ScannerPageState extends State<ScannerPage>
             ),
           ),
           _buildHeaderButton('Done', widget.onDone),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStepIndicator() {
-    final isProcessingStep = _currentStep.stepNumber >= ScannerStep.adConversion.stepNumber &&
-        _currentStep.stepNumber <= ScannerStep.imageFormation.stepNumber;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: isProcessingStep ? 0.15 : 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.12),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: 0.3),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'Step ${_currentStep.stepNumber} of ${ScannerStep.totalSteps}',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.white,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _currentStep.title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: Colors.white.withValues(alpha: 0.9),
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
         ],
       ),
     );
@@ -279,7 +127,6 @@ class _ScannerPageState extends State<ScannerPage>
                 ? CameraPreview(widget.cameraController!)
                 : _buildCameraPlaceholder(),
             _buildViewfinderOverlay(),
-            _buildScanLine(),
           ],
         ),
       ),
@@ -287,49 +134,17 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildCameraPlaceholder() {
-    final step1 = ScannerStep.preScanPrep;
-    final errorMessage = widget.cameraErrorMessage;
-
     return Container(
       color: Colors.black,
-      child: Center(
+      child: const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              errorMessage != null ? Icons.error_outline : Icons.camera_alt_outlined,
-              size: 64,
-              color: errorMessage != null ? Colors.redAccent.withValues(alpha: 0.6) : Colors.white24,
-            ),
-            const SizedBox(height: 16),
+            Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white24),
+            SizedBox(height: 16),
             Text(
-              errorMessage ?? 'Camera not available',
-              style: TextStyle(
-                color: errorMessage != null ? Colors.redAccent.withValues(alpha: 0.7) : Colors.white54,
-                fontSize: 14,
-                fontWeight: errorMessage != null ? FontWeight.w600 : FontWeight.normal,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                errorMessage != null
-                    ? 'Check permissions or restart your device if this persists.'
-                    : 'Please run on a physical device to use camera',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Text(
-                '${step1.title}: ${step1.description}',
-                style: const TextStyle(color: Colors.white38, fontSize: 11),
-                textAlign: TextAlign.center,
-              ),
+              'Camera not available',
+              style: TextStyle(color: Colors.white54, fontSize: 14),
             ),
           ],
         ),
@@ -415,18 +230,6 @@ class _ScannerPageState extends State<ScannerPage>
               : Radius.zero,
         ),
       ),
-    );
-  }
-
-  Widget _buildScanLine() {
-    return AnimatedBuilder(
-      animation: _scanLineAnimation,
-      builder: (context, child) {
-        return CustomPaint(
-          painter: ScanLinePainter(progress: _scanLineAnimation.value),
-          size: Size.infinite,
-        );
-      },
     );
   }
 
@@ -524,79 +327,88 @@ class _ScannerPageState extends State<ScannerPage>
             border: Border.all(color: AppColors.green, width: 3),
           ),
           child: Center(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: _isScanning
-                  ? const SizedBox(
-                      key: ValueKey('loading'),
-                      width: 28,
-                      height: 28,
-                      child: CircularProgressIndicator(
-                        color: AppColors.green,
-                        strokeWidth: 3,
-                      ),
-                    )
-                  : Container(
-                      key: const ValueKey('capture'),
-                      width: 24,
-                      height: 24,
-                      decoration: const BoxDecoration(
-                        color: AppColors.green,
-                        shape: BoxShape.circle,
-                      ),
+            child: _isScanning
+                ? const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      color: AppColors.green,
+                      strokeWidth: 3,
                     ),
-            ),
+                  )
+                : Container(
+                    width: 24,
+                    height: 24,
+                    decoration: const BoxDecoration(
+                      color: AppColors.green,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
           ),
         ),
       ),
     );
   }
 
+  void _onCapture() {
+    if (_isScanning) return;
+
+    setState(() {
+      _isScanning = true;
+    });
+
+    widget.onCapture();
+
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          _isScanning = false;
+        });
+      }
+    });
+  }
+
   Widget _buildScanningOverlay() {
-    final showStepDetail = _currentStep.stepNumber >= ScannerStep.adConversion.stepNumber &&
-        _currentStep.stepNumber <= ScannerStep.imageFormation.stepNumber;
     return Container(
-      color: Colors.black.withValues(alpha: 0.5),
+      color: Colors.black.withValues(alpha: 0.6),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(
-                  width: 120,
-                  height: 120,
-                  child: CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                    strokeWidth: 4,
-                  ),
-                ),
-                Icon(
-                  _currentStep == ScannerStep.postScan
-                      ? Icons.check_circle
-                      : Icons.document_scanner,
-                  size: 50,
-                  color: Colors.white,
-                ),
-              ],
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                color: AppColors.green.withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.document_scanner,
+                size: 50,
+                color: Colors.white,
+              ),
             ),
             const SizedBox(height: 24),
-            Text(
-              showStepDetail ? _currentStep.title : 'Scanning document...',
-              style: const TextStyle(
+            const Text(
+              'Scanning document...',
+              style: TextStyle(
                 color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w500,
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
               ),
-              textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
-            Text(
-              showStepDetail
-                  ? _currentStep.description
-                  : 'Processing image',
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: 200,
+              child: LinearProgressIndicator(
+                backgroundColor: Colors.white24,
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'Processing image...\nThis may take a few seconds',
+              style: TextStyle(color: Colors.white70, fontSize: 14),
               textAlign: TextAlign.center,
             ),
           ],
@@ -699,42 +511,4 @@ class _ScannerPageState extends State<ScannerPage>
       ),
     );
   }
-}
-
-class ScanLinePainter extends CustomPainter {
-  final double progress;
-
-  ScanLinePainter({required this.progress});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [
-          Colors.transparent,
-          Colors.white.withValues(alpha: 0.8),
-          Colors.white.withValues(alpha: 0.8),
-          Colors.transparent,
-        ],
-        stops: const [0.0, 0.3, 0.7, 1.0],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    final y = size.height * progress;
-    final rect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(20, y - 15, size.width - 40, 30),
-      const Radius.circular(4),
-    );
-    canvas.drawRRect(rect, paint);
-
-    final glowPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.3)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    canvas.drawRRect(rect, glowPaint);
-  }
-
-  @override
-  bool shouldRepaint(ScanLinePainter oldDelegate) =>
-      oldDelegate.progress != progress;
 }
