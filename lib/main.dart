@@ -226,11 +226,15 @@ class _MainScreenState extends State<MainScreen> {
     if (_showResult) {
       return ScanResultPage(
         scannedImages: appState.capturedImages,
+        ocrResults: appState.ocrResults,
+        isProcessingOcr: appState.isProcessingOcr,
         onRetry: _onResultRetry,
         onSave: _onResultSave,
         onBack: _onResultBack,
         onRemoveImage: _onResultRemoveImage,
         onAddMore: _onResultAddMore,
+        onProcessOcr: () => appState.processOcrForAllImages(),
+        onTextChanged: (text) {},
       );
     }
 
