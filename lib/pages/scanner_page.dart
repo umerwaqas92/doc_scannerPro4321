@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../theme/app_theme.dart';
+import '../models/scanner_steps.dart';
 
 class ScannerPage extends StatefulWidget {
   final VoidCallback onCancel;
@@ -29,30 +31,135 @@ class ScannerPage extends StatefulWidget {
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScannerPageState extends State<ScannerPage> {
+class _ScannerPageState extends State<ScannerPage>
+    with TickerProviderStateMixin {
   int _selectedFilter = 0;
   final List<String> _filters = ['Auto', 'B&W', 'Color', 'Grayscale', 'Photo'];
+
+  bool _isScanning = false;
+  ScannerStep _currentStep = ScannerStep.preScanPrep;
+  bool _didReachScanningStep = false;
+
+  late AnimationController _scanLineController;
+  late AnimationController _captureFlashController;
+  late Animation<double> _scanLineAnimation;
+  late Animation<double> _flashAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentStep = ScannerStep.initialization;
+
+    _scanLineController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    );
+
+    _captureFlashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+
+    _scanLineAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _scanLineController, curve: Curves.easeInOut),
+    );
+
+    _flashAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _captureFlashController, curve: Curves.easeOut),
+    );
+
+    _scanLineController.repeat();
+  }
+
+  @override
+  void didUpdateWidget(ScannerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.isCameraInitialized && !_didReachScanningStep) {
+      _didReachScanningStep = true;
+      setState(() => _currentStep = ScannerStep.scanning);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scanLineController.dispose();
+    _captureFlashController.dispose();
+    super.dispose();
+  }
+
+  void _onCapture() {
+    debugPrint('Capture button pressed, isScanning: $_isScanning');
+    if (_isScanning) return;
+
+    setState(() {
+      _isScanning = true;
+      _currentStep = ScannerStep.adConversion;
+    });
+
+    _captureFlashController.forward(from: 0);
+    debugPrint('Starting capture process...');
+
+    Future.delayed(const Duration(milliseconds: 280), () {
+      if (!mounted) return;
+      setState(() => _currentStep = ScannerStep.imageProcessing);
+    });
+    Future.delayed(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      widget.onCapture();
+    });
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      setState(() => _currentStep = ScannerStep.imageFormation);
+    });
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      setState(() => _currentStep = ScannerStep.postScan);
+      Future.delayed(const Duration(milliseconds: 700), () {
+        if (!mounted) return;
+        setState(() {
+          _isScanning = false;
+          _currentStep = ScannerStep.scanning;
+        });
+      });
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: AppColors.scannerBg,
-      child: Column(
+      child: Stack(
         children: [
-          _buildHeader(),
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  _buildCameraPreview(),
-                  _buildFilterStrip(),
-                  _buildCaptureControls(),
-                  _buildThumbStrip(),
-                  const SizedBox(height: 16),
-                ],
+          Column(
+            children: [
+              _buildHeader(),
+              _buildStepIndicator(),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      _buildCameraPreview(),
+                      _buildFilterStrip(),
+                      _buildCaptureControls(),
+                      _buildThumbStrip(),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
+          AnimatedBuilder(
+            animation: _flashAnimation,
+            builder: (context, child) {
+              return Container(
+                color: Colors.white.withValues(
+                  alpha: _flashAnimation.value * 0.5,
+                ),
+              );
+            },
+          ),
+          if (_isScanning) _buildScanningOverlay(),
         ],
       ),
     );
@@ -76,6 +183,53 @@ class _ScannerPageState extends State<ScannerPage> {
             ),
           ),
           _buildHeaderButton('Done', widget.onDone),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepIndicator() {
+    final isProcessingStep = _currentStep.stepNumber >= ScannerStep.adConversion.stepNumber &&
+        _currentStep.stepNumber <= ScannerStep.imageFormation.stepNumber;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: isProcessingStep ? 0.15 : 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.accent.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'Step ${_currentStep.stepNumber} of ${ScannerStep.totalSteps}',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _currentStep.title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: Colors.white.withValues(alpha: 0.9),
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -119,6 +273,7 @@ class _ScannerPageState extends State<ScannerPage> {
                 ? CameraPreview(widget.cameraController!)
                 : _buildCameraPlaceholder(),
             _buildViewfinderOverlay(),
+            _buildScanLine(),
           ],
         ),
       ),
@@ -126,24 +281,34 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   Widget _buildCameraPlaceholder() {
+    final step1 = ScannerStep.preScanPrep;
     return Container(
       color: Colors.black,
-      child: const Center(
+      child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white24),
-            SizedBox(height: 16),
-            Text(
+            const Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white24),
+            const SizedBox(height: 16),
+            const Text(
               'Camera not available',
               style: TextStyle(color: Colors.white54, fontSize: 14),
             ),
-            SizedBox(height: 8),
-            Padding(
+            const SizedBox(height: 8),
+            const Padding(
               padding: EdgeInsets.symmetric(horizontal: 32),
               child: Text(
                 'Please run on a physical device to use camera',
                 style: TextStyle(color: Colors.white38, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(
+                '${step1.title}: ${step1.description}',
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -162,30 +327,29 @@ class _ScannerPageState extends State<ScannerPage> {
             height: 290,
             decoration: BoxDecoration(
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.85),
+                color: Colors.white.withValues(alpha: 0.7),
                 width: 2,
               ),
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Stack(
               children: [
-                Positioned(top: -1, left: -1, child: _buildCorner(true, true)),
+                Positioned(top: -2, left: -2, child: _buildCorner(true, true)),
                 Positioned(
-                  top: -1,
-                  right: -1,
+                  top: -2,
+                  right: -2,
                   child: _buildCorner(true, false),
                 ),
                 Positioned(
-                  bottom: -1,
-                  left: -1,
+                  bottom: -2,
+                  left: -2,
                   child: _buildCorner(false, true),
                 ),
                 Positioned(
-                  bottom: -1,
-                  right: -1,
+                  bottom: -2,
+                  right: -2,
                   child: _buildCorner(false, false),
                 ),
-                _buildScanLine(),
               ],
             ),
           ),
@@ -206,8 +370,8 @@ class _ScannerPageState extends State<ScannerPage> {
 
   Widget _buildCorner(bool isTop, bool isLeft) {
     return Container(
-      width: 18,
-      height: 18,
+      width: 20,
+      height: 20,
       decoration: BoxDecoration(
         border: Border(
           top: isTop
@@ -224,11 +388,11 @@ class _ScannerPageState extends State<ScannerPage> {
               : BorderSide.none,
         ),
         borderRadius: BorderRadius.only(
-          topLeft: isTop && isLeft ? const Radius.circular(2) : Radius.zero,
-          topRight: isTop && !isLeft ? const Radius.circular(2) : Radius.zero,
-          bottomLeft: !isTop && isLeft ? const Radius.circular(2) : Radius.zero,
+          topLeft: isTop && isLeft ? const Radius.circular(4) : Radius.zero,
+          topRight: isTop && !isLeft ? const Radius.circular(4) : Radius.zero,
+          bottomLeft: !isTop && isLeft ? const Radius.circular(4) : Radius.zero,
           bottomRight: !isTop && !isLeft
-              ? const Radius.circular(2)
+              ? const Radius.circular(4)
               : Radius.zero,
         ),
       ),
@@ -236,29 +400,14 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   Widget _buildScanLine() {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.0, end: 1.0),
-      duration: const Duration(seconds: 2),
-      builder: (context, value, child) {
-        return Positioned(
-          top: 4 + (value * 276),
-          left: 2,
-          right: 2,
-          child: Container(
-            height: 2,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Colors.transparent,
-                  Colors.white.withValues(alpha: 0.9),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-          ),
+    return AnimatedBuilder(
+      animation: _scanLineAnimation,
+      builder: (context, child) {
+        return CustomPaint(
+          painter: ScanLinePainter(progress: _scanLineAnimation.value),
+          size: Size.infinite,
         );
       },
-      onEnd: () => setState(() {}),
     );
   }
 
@@ -304,7 +453,10 @@ class _ScannerPageState extends State<ScannerPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildCtrlButton(Icons.bolt_outlined, widget.onAddFromGallery),
+          _buildCtrlButton(
+            Icons.photo_library_outlined,
+            widget.onAddFromGallery,
+          ),
           _buildCaptureButton(),
           _buildCtrlButton(Icons.flip_outlined, () {}),
         ],
@@ -330,31 +482,105 @@ class _ScannerPageState extends State<ScannerPage> {
 
   Widget _buildCaptureButton() {
     return GestureDetector(
-      onTap: widget.onCapture,
+      onTap: _onCapture,
       child: Container(
         width: 72,
         height: 72,
         decoration: BoxDecoration(
-          color: Colors.white,
           shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 4),
           boxShadow: [
             BoxShadow(
-              color: Colors.white.withValues(alpha: 0.2),
-              blurRadius: 5,
-              spreadRadius: 5,
+              color: Colors.black.withValues(alpha: 0.3),
+              blurRadius: 10,
+              spreadRadius: 2,
             ),
           ],
         ),
-        child: Center(
-          child: Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.black, width: 3),
+        child: Container(
+          margin: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.green, width: 3),
+          ),
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: _isScanning
+                  ? const SizedBox(
+                      key: ValueKey('loading'),
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        color: AppColors.green,
+                        strokeWidth: 3,
+                      ),
+                    )
+                  : Container(
+                      key: const ValueKey('capture'),
+                      width: 24,
+                      height: 24,
+                      decoration: const BoxDecoration(
+                        color: AppColors.green,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScanningOverlay() {
+    final showStepDetail = _currentStep.stepNumber >= ScannerStep.adConversion.stepNumber &&
+        _currentStep.stepNumber <= ScannerStep.imageFormation.stepNumber;
+    return Container(
+      color: Colors.black.withValues(alpha: 0.5),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 120,
+                  height: 120,
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    strokeWidth: 4,
+                  ),
+                ),
+                Icon(
+                  _currentStep == ScannerStep.postScan
+                      ? Icons.check_circle
+                      : Icons.document_scanner,
+                  size: 50,
+                  color: Colors.white,
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Text(
+              showStepDetail ? _currentStep.title : 'Scanning document...',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 18,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              showStepDetail
+                  ? _currentStep.description
+                  : 'Processing image',
+              style: const TextStyle(color: Colors.white70, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       ),
     );
@@ -454,4 +680,42 @@ class _ScannerPageState extends State<ScannerPage> {
       ),
     );
   }
+}
+
+class ScanLinePainter extends CustomPainter {
+  final double progress;
+
+  ScanLinePainter({required this.progress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Colors.transparent,
+          Colors.white.withValues(alpha: 0.8),
+          Colors.white.withValues(alpha: 0.8),
+          Colors.transparent,
+        ],
+        stops: const [0.0, 0.3, 0.7, 1.0],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    final y = size.height * progress;
+    final rect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(20, y - 15, size.width - 40, 30),
+      const Radius.circular(4),
+    );
+    canvas.drawRRect(rect, paint);
+
+    final glowPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+    canvas.drawRRect(rect, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(ScanLinePainter oldDelegate) =>
+      oldDelegate.progress != progress;
 }

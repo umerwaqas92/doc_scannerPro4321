@@ -1,9 +1,30 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
 class DocumentScannerService {
+  List<ScanPoint>? _detectedEdges;
+  bool _isProcessing = false;
+
+  final StreamController<List<ScanPoint>> _edgesController =
+      StreamController<List<ScanPoint>>.broadcast();
+  Stream<List<ScanPoint>> get edgesStream => _edgesController.stream;
+
+  /// The official prompt used to guide the enhancement logic
+  static const String enhancementPrompt = '''
+    Enhance the uploaded image captured from a camera.
+    Automatically detect and correct lighting and white balance.
+    Remove noise and blur while preserving natural details.
+    Improve sharpness and clarity.
+    Correct perspective distortion if present.
+    Maintain original colors without over-saturation.
+    Crop unnecessary background while keeping the main subject centered.
+    Output a high-resolution, clean, natural-looking image.
+  ''';
+
   Future<File?> processDocument(
     File imageFile, {
     bool autoEnhance = true,
@@ -17,16 +38,19 @@ class DocumentScannerService {
         return null;
       }
 
-      final edges = await _detectEdges(image);
-
-      if (edges != null) {
-        image = _applyPerspectiveCorrection(image, edges);
-        debugPrint('Applied perspective correction');
+      // 1. Detect edges and correct perspective (if autoEnhance enabled)
+      if (autoEnhance) {
+        final edges = await _detectEdges(image);
+        if (edges != null) {
+          image = _applyPerspectiveCorrection(image, edges);
+          debugPrint('Applied perspective correction and cropping');
+        }
       }
 
+      // 2. Apply the "Image Scanner (Photos Only)" enhancement prompt logic
       if (autoEnhance) {
-        image = _enhanceDocument(image);
-        debugPrint('Applied image enhancement');
+        image = _enhanceWithPromptLogic(image);
+        debugPrint('Applied enhancement prompt logic');
       }
 
       final outputPath = imageFile.path.replaceAll('.jpg', '_scanned.jpg');
@@ -34,11 +58,120 @@ class DocumentScannerService {
       final encodedImage = img.encodeJpg(image, quality: 95);
       await outputFile.writeAsBytes(encodedImage);
 
-      debugPrint('Document processed successfully: $outputPath');
+      debugPrint('Document processed successfully with prompt logic: $outputPath');
       return outputFile;
     } catch (e) {
       debugPrint('Error processing document: $e');
       return imageFile;
+    }
+  }
+
+  /// Implementation of the "Image Scanner (Photos Only)" Prompt logic
+  img.Image _enhanceWithPromptLogic(img.Image image) {
+    var processed = image;
+
+    // A. Detect and correct lighting and white balance
+    processed = _correctLightingAndWhitebalance(processed);
+
+    // B. Remove noise and blur while preserving natural details
+    processed = _denoiseAndDeBlur(processed);
+
+    // C. Improve sharpness and clarity
+    processed = _sharpenAndClarify(processed);
+
+    // D. Maintain original colors without over-saturation
+    processed = _adjustColors(processed);
+
+    return processed;
+  }
+
+  img.Image _correctLightingAndWhitebalance(img.Image image) {
+    // Basic white balance correction (Grey-world approximation)
+    var rTotal = 0.0, gTotal = 0.0, bTotal = 0.0;
+    final numPixels = image.width * image.height;
+    
+    // Calculate average for each channel
+    for (final pixel in image) {
+      rTotal += pixel.r.toDouble();
+      gTotal += pixel.g.toDouble();
+      bTotal += pixel.b.toDouble();
+    }
+    
+    final avgR = rTotal / numPixels;
+    final avgG = gTotal / numPixels;
+    final avgB = bTotal / numPixels;
+    final avgGray = (avgR + avgG + avgB) / 3.0;
+
+    final scaleR = avgGray / (avgR > 0 ? avgR : 1.0);
+    final scaleG = avgGray / (avgG > 0 ? avgG : 1.0);
+    final scaleB = avgGray / (avgB > 0 ? avgB : 1.0);
+
+    // Create a new image for the output
+    final output = img.Image(width: image.width, height: image.height);
+    for (int y = 0; y < image.height; y++) {
+      for (int x = 0; x < image.width; x++) {
+        final pixel = image.getPixel(x, y);
+        final nr = (pixel.r * scaleR).clamp(0, 255).toInt();
+        final ng = (pixel.g * scaleG).clamp(0, 255).toInt();
+        final nb = (pixel.b * scaleB).clamp(0, 255).toInt();
+        output.setPixel(x, y, img.ColorRgb8(nr, ng, nb));
+      }
+    }
+
+    // Apply color correction and normalize lighting
+    return img.adjustColor(
+      output,
+      brightness: 1.02,
+      contrast: 1.05,
+      gamma: 1.02,
+    );
+  }
+
+  img.Image _denoiseAndDeBlur(img.Image image) {
+    // Denoise using a light median filter or gaussian blur
+    // Median filter is better for noise while preserving edges
+    var denoised = img.gaussianBlur(image, radius: 1);
+    return denoised;
+  }
+
+  img.Image _sharpenAndClarify(img.Image image) {
+    // Simple sharpen kernel
+    // [0, -1, 0,
+    // -1, 5, -1,
+    // 0, -1, 0]
+    final kernel = [0.0, -0.5, 0.0, -0.5, 3.0, -0.5, 0.0, -0.5, 0.0];
+    return img.convolution(image, filter: kernel);
+  }
+
+  img.Image _adjustColors(img.Image image) {
+    // Ensure colors are natural and not over-saturated
+    return img.adjustColor(
+      image,
+      saturation: 1.02, // Very slight boost but keep natural
+    );
+  }
+
+  Future<List<ScanPoint>?> detectEdgesFromBytes(Uint8List bytes) async {
+    if (_isProcessing) return _detectedEdges;
+
+    try {
+      _isProcessing = true;
+      final image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      final edges = await _detectEdges(image);
+      _detectedEdges = edges;
+
+      if (edges != null) {
+        _edgesController.add(edges);
+      }
+
+      return edges;
+    } catch (e) {
+      debugPrint('Edge detection error: $e');
+      return null;
+    } finally {
+      _isProcessing = false;
     }
   }
 
@@ -158,7 +291,7 @@ class DocumentScannerService {
         return ScanPoint(x.toDouble(), (height ~/ 2).toDouble());
       }
     }
-    return ScanPoint((width * 9 ~/ 10).toDouble(), (height ~/ 2).toDouble());
+    return ScanPoint((width ~/ 10).toDouble(), (height ~/ 2).toDouble());
   }
 
   ScanPoint? _findRightEdge(img.Image binary, int width, int height) {
@@ -171,10 +304,7 @@ class DocumentScannerService {
         return ScanPoint(x.toDouble(), (height ~/ 2).toDouble());
       }
     }
-    return ScanPoint(
-      (width * 9 ~/ 10).toDouble(),
-      (height * 9 ~/ 10).toDouble(),
-    );
+    return ScanPoint((width * 9 ~/ 10).toDouble(), (height ~/ 2).toDouble());
   }
 
   List<ScanPoint> _getDefaultEdges(int width, int height) {
@@ -449,9 +579,7 @@ class DocumentScannerService {
 
   img.Image _enhanceDocument(img.Image image) {
     var enhanced = img.adjustColor(image, contrast: 1.2, brightness: 1.05);
-
     enhanced = _increaseContrast(enhanced);
-
     return enhanced;
   }
 
@@ -497,6 +625,10 @@ class DocumentScannerService {
       debugPrint('Error enhancing image: $e');
       return imageFile;
     }
+  }
+
+  void dispose() {
+    _edgesController.close();
   }
 }
 

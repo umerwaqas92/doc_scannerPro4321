@@ -75,9 +75,10 @@ class AppState extends ChangeNotifier {
   Future<File?> captureImage() async {
     final image = await _cameraService.captureImage();
     if (image != null) {
+      // Always auto-enhance for the "Image Scanner (Photos Only)" prompt logic
       final processedImage = await _documentScannerService.processDocument(
         image,
-        autoEnhance: _autoCrop,
+        autoEnhance: true, 
       );
       if (processedImage != null) {
         _capturedImages.add(processedImage);
@@ -92,9 +93,10 @@ class AppState extends ChangeNotifier {
   Future<void> addImageFromGallery() async {
     final image = await _imagePickerService.pickFromGallery();
     if (image != null) {
+      // Apply the same high-quality enhancement for gallery photos
       final processedImage = await _documentScannerService.processDocument(
         image,
-        autoEnhance: _autoCrop,
+        autoEnhance: true,
       );
       if (processedImage != null) {
         _capturedImages.add(processedImage);
