@@ -31,39 +31,100 @@ class DocumentScannerService {
   }) async {
     try {
       final bytes = await imageFile.readAsBytes();
-      var image = img.decodeImage(bytes);
+      
+      // Use compute to perform heavy image processing in background isolate
+      final processedBytes = await compute(_processImageInBackground, {
+        'bytes': bytes,
+        'autoEnhance': autoEnhance,
+      });
 
-      if (image == null) {
-        debugPrint('Failed to decode image');
-        return null;
-      }
-
-      // 1. Detect edges and correct perspective (if autoEnhance enabled)
-      if (autoEnhance) {
-        final edges = await _detectEdges(image);
-        if (edges != null) {
-          image = _applyPerspectiveCorrection(image, edges);
-          debugPrint('Applied perspective correction and cropping');
-        }
-      }
-
-      // 2. Apply the "Image Scanner (Photos Only)" enhancement prompt logic
-      if (autoEnhance) {
-        image = _enhanceWithPromptLogic(image);
-        debugPrint('Applied enhancement prompt logic');
+      if (processedBytes == null) {
+        debugPrint('Failed to process image in background');
+        return imageFile;
       }
 
       final outputPath = imageFile.path.replaceAll('.jpg', '_scanned.jpg');
       final outputFile = File(outputPath);
-      final encodedImage = img.encodeJpg(image, quality: 95);
-      await outputFile.writeAsBytes(encodedImage);
+      await outputFile.writeAsBytes(processedBytes);
 
-      debugPrint('Document processed successfully with prompt logic: $outputPath');
+      debugPrint('Document processed successfully: $outputPath');
       return outputFile;
     } catch (e) {
       debugPrint('Error processing document: $e');
       return imageFile;
     }
+  }
+
+  /// Top-level or static method for compute()
+  static Uint8List? _processImageInBackground(Map<String, dynamic> params) {
+    final Uint8List bytes = params['bytes'];
+    final bool autoEnhance = params['autoEnhance'];
+    
+    var image = img.decodeImage(bytes);
+    if (image == null) return null;
+
+    final service = DocumentScannerService();
+
+    // 1. Detect edges and correct perspective
+    if (autoEnhance) {
+      final edges = service._detectEdgesSync(image);
+      if (edges != null) {
+        image = service._applyPerspectiveCorrection(image, edges);
+      }
+    }
+
+    // 2. Apply enhancement prompt logic
+    if (autoEnhance) {
+      image = service._enhanceWithPromptLogic(image);
+    }
+
+    return img.encodeJpg(image, quality: 95);
+  }
+
+  /// Synchronous version for internal use
+  List<ScanPoint>? _detectEdgesSync(img.Image image) {
+    try {
+      final width = image.width;
+      final height = image.height;
+      final grayscale = img.grayscale(image);
+      final edges = _findDocumentEdges(grayscale, width, height);
+
+      if (edges != null && _isValidQuadrilateral(edges)) {
+        return edges;
+      }
+      return _getDefaultEdges(width, height);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<List<ScanPoint>?> detectEdgesFromBytes(Uint8List bytes) async {
+    if (_isProcessing) return _detectedEdges;
+
+    try {
+      _isProcessing = true;
+      
+      // Also offload edge detection from bytes to background
+      final edges = await compute(_detectEdgesFromBytesInBackground, bytes);
+      _detectedEdges = edges;
+
+      if (edges != null) {
+        _edgesController.add(edges);
+      }
+
+      return edges;
+    } catch (e) {
+      debugPrint('Edge detection error: $e');
+      return null;
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  static List<ScanPoint>? _detectEdgesFromBytesInBackground(Uint8List bytes) {
+    final image = img.decodeImage(bytes);
+    if (image == null) return null;
+    return DocumentScannerService()._detectEdgesSync(image);
   }
 
   /// Implementation of the "Image Scanner (Photos Only)" Prompt logic
@@ -149,50 +210,6 @@ class DocumentScannerService {
       image,
       saturation: 1.02, // Very slight boost but keep natural
     );
-  }
-
-  Future<List<ScanPoint>?> detectEdgesFromBytes(Uint8List bytes) async {
-    if (_isProcessing) return _detectedEdges;
-
-    try {
-      _isProcessing = true;
-      final image = img.decodeImage(bytes);
-      if (image == null) return null;
-
-      final edges = await _detectEdges(image);
-      _detectedEdges = edges;
-
-      if (edges != null) {
-        _edgesController.add(edges);
-      }
-
-      return edges;
-    } catch (e) {
-      debugPrint('Edge detection error: $e');
-      return null;
-    } finally {
-      _isProcessing = false;
-    }
-  }
-
-  Future<List<ScanPoint>?> _detectEdges(img.Image image) async {
-    try {
-      final width = image.width;
-      final height = image.height;
-
-      final grayscale = img.grayscale(image);
-
-      final edges = _findDocumentEdges(grayscale, width, height);
-
-      if (edges != null && _isValidQuadrilateral(edges)) {
-        return edges;
-      }
-
-      return _getDefaultEdges(width, height);
-    } catch (e) {
-      debugPrint('Edge detection error: $e');
-      return null;
-    }
   }
 
   List<ScanPoint>? _findDocumentEdges(

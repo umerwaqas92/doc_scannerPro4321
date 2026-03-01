@@ -113,7 +113,7 @@ class HomePage extends StatelessWidget {
                     'Tap to open camera scanner',
                     style: TextStyle(
                       fontSize: 13,
-                      color: Colors.white.withValues(alpha: 0.6),
+                      color: Colors.white.withOpacity(0.6),
                     ),
                   ),
                 ],
@@ -123,7 +123,7 @@ class HomePage extends StatelessWidget {
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
+                color: Colors.white.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: const Icon(

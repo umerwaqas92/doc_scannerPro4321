@@ -73,15 +73,18 @@ class AppState extends ChangeNotifier {
   }
 
   Future<File?> captureImage() async {
+    debugPrint('AppState: captureImage called');
     final image = await _cameraService.captureImage();
+    debugPrint('AppState: image captured, processing...');
     if (image != null) {
-      // Always auto-enhance for the "Image Scanner (Photos Only)" prompt logic
+      // Apply all scanner enhancements
       final processedImage = await _documentScannerService.processDocument(
         image,
-        autoEnhance: true, 
+        autoEnhance: true,
       );
       if (processedImage != null) {
         _capturedImages.add(processedImage);
+        debugPrint('AppState: processed image added to capturedImages');
       } else {
         _capturedImages.add(image);
       }

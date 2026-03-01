@@ -1,13 +1,29 @@
 /// Seven-step workflow for bottom (flatbed) scanner flow.
 /// Used to guide the user and show progress during scan.
 enum ScannerStep {
-  preScanPrep(1, 'Initial preparation', 'Optimizing lighting and alignment...'),
-  initialization(2, 'Scanner initialization', 'Lamp on. Moving to start position...'),
-  scanning(3, 'High-resolution scan', 'Capturing image and detecting edges...'),
-  adConversion(4, 'Enhancement phase', 'Detecting and correcting lighting and white balance...'),
-  imageProcessing(5, 'Image processing', 'Removing noise and blur while preserving details...'),
-  imageFormation(6, 'Image formation', 'Improving sharpness, clarity and perspective...'),
-  postScan(7, 'Post-scan', 'Outputting high-resolution, clean, natural image.');
+  preScanPrep(1, 'Preparing scanner', 'Optimizing lighting and alignment...'),
+  initialization(2, 'Initializing', 'Starting scanner system...'),
+  scanning(3, 'Scanning', 'Capturing high-resolution image...'),
+  adConversion(
+    4,
+    'Lighting correction',
+    'Automatically detect and correct lighting and white balance...',
+  ),
+  imageProcessing(
+    5,
+    'Noise reduction',
+    'Remove noise and blur while preserving natural details...',
+  ),
+  imageFormation(
+    6,
+    'Enhancing',
+    'Improve sharpness, clarity and correct perspective...',
+  ),
+  postScan(
+    7,
+    'Finalizing',
+    'Outputting high-resolution, clean, natural image...',
+  );
 
   const ScannerStep(this.stepNumber, this.title, this.description);
 

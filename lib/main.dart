@@ -213,6 +213,7 @@ class _MainScreenState extends State<MainScreen> {
       return ScannerPage(
         cameraController: appState.cameraService.controller,
         isCameraInitialized: appState.cameraInitialized,
+        cameraErrorMessage: appState.cameraService.errorMessage,
         capturedImages: appState.capturedImages,
         onRemoveImage: (index) => appState.removeCapturedImage(index),
         onCancel: _onScannerCancel,

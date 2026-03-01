@@ -15,6 +15,8 @@ class ScannerPage extends StatefulWidget {
   final List<File> capturedImages;
   final Function(int) onRemoveImage;
 
+  final String? cameraErrorMessage;
+
   const ScannerPage({
     super.key,
     required this.onCancel,
@@ -25,6 +27,7 @@ class ScannerPage extends StatefulWidget {
     required this.isCameraInitialized,
     required this.capturedImages,
     required this.onRemoveImage,
+    this.cameraErrorMessage,
   });
 
   @override
@@ -149,15 +152,18 @@ class _ScannerPageState extends State<ScannerPage>
               ),
             ],
           ),
-          AnimatedBuilder(
-            animation: _flashAnimation,
-            builder: (context, child) {
-              return Container(
-                color: Colors.white.withValues(
-                  alpha: _flashAnimation.value * 0.5,
-                ),
-              );
-            },
+          IgnorePointer(
+            ignoring: true,
+            child: AnimatedBuilder(
+              animation: _flashAnimation,
+              builder: (context, child) {
+                return Container(
+                  color: Colors.white.withValues(
+                    alpha: _flashAnimation.value * 0.5,
+                  ),
+                );
+              },
+            ),
           ),
           if (_isScanning) _buildScanningOverlay(),
         ],
@@ -282,24 +288,37 @@ class _ScannerPageState extends State<ScannerPage>
 
   Widget _buildCameraPlaceholder() {
     final step1 = ScannerStep.preScanPrep;
+    final errorMessage = widget.cameraErrorMessage;
+
     return Container(
       color: Colors.black,
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.camera_alt_outlined, size: 64, color: Colors.white24),
+            Icon(
+              errorMessage != null ? Icons.error_outline : Icons.camera_alt_outlined,
+              size: 64,
+              color: errorMessage != null ? Colors.redAccent.withValues(alpha: 0.6) : Colors.white24,
+            ),
             const SizedBox(height: 16),
-            const Text(
-              'Camera not available',
-              style: TextStyle(color: Colors.white54, fontSize: 14),
+            Text(
+              errorMessage ?? 'Camera not available',
+              style: TextStyle(
+                color: errorMessage != null ? Colors.redAccent.withValues(alpha: 0.7) : Colors.white54,
+                fontSize: 14,
+                fontWeight: errorMessage != null ? FontWeight.w600 : FontWeight.normal,
+              ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 32),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
-                'Please run on a physical device to use camera',
-                style: TextStyle(color: Colors.white38, fontSize: 12),
+                errorMessage != null
+                    ? 'Check permissions or restart your device if this persists.'
+                    : 'Please run on a physical device to use camera',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
                 textAlign: TextAlign.center,
               ),
             ),

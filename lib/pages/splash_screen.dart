@@ -74,7 +74,7 @@ class _SplashScreenState extends State<SplashScreen>
                         borderRadius: BorderRadius.circular(30),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.3),
+                            color: Colors.black.withOpacity(0.3),
                             blurRadius: 30,
                             offset: const Offset(0, 10),
                           ),
@@ -101,7 +101,7 @@ class _SplashScreenState extends State<SplashScreen>
                       'Document Scanner',
                       style: TextStyle(
                         fontSize: 16,
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: Colors.white.withOpacity(0.7),
                         letterSpacing: 2,
                       ),
                     ),
@@ -112,7 +112,7 @@ class _SplashScreenState extends State<SplashScreen>
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.white.withValues(alpha: 0.7),
+                          Colors.white.withOpacity(0.7),
                         ),
                       ),
                     ),
