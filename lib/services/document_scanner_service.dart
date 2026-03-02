@@ -68,11 +68,27 @@ class DocumentScannerService {
     double contrast = 1.0,
     double rotation = 0.0,
     int filter = 0,
+    String? outputTag,
+    int? maxDimension,
+    int quality = 95,
   }) async {
     try {
       final bytes = await imageFile.readAsBytes();
       var image = img.decodeImage(bytes);
       if (image == null) return null;
+
+      if (maxDimension != null) {
+        final maxDim = math.max(image.width, image.height);
+        if (maxDim > maxDimension) {
+          final ratio = maxDimension / maxDim;
+          image = img.copyResize(
+            image,
+            width: (image.width * ratio).round(),
+            height: (image.height * ratio).round(),
+            interpolation: img.Interpolation.linear,
+          );
+        }
+      }
 
       final normalizedTurns = (((rotation / 90).round() % 4) + 4) % 4;
       if (normalizedTurns == 1) {
@@ -154,9 +170,10 @@ class DocumentScannerService {
         );
       }
 
-      final outputPath = _getAdjustedPath(imageFile.path);
+      final outputPath = _getAdjustedPath(imageFile.path, tag: outputTag);
       final outputFile = File(outputPath);
-      await outputFile.writeAsBytes(img.encodeJpg(image, quality: 95));
+      final safeQuality = quality.clamp(70, 100).toInt();
+      await outputFile.writeAsBytes(img.encodeJpg(image, quality: safeQuality));
 
       return outputFile;
     } catch (e) {
@@ -165,12 +182,16 @@ class DocumentScannerService {
     }
   }
 
-  String _getAdjustedPath(String originalPath) {
+  String _getAdjustedPath(String originalPath, {String? tag}) {
     final lastDot = originalPath.lastIndexOf('.');
+    final safeTag =
+        (tag == null || tag.trim().isEmpty)
+        ? DateTime.now().microsecondsSinceEpoch.toString()
+        : tag.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
     if (lastDot == -1) {
-      return '${originalPath}_adjusted.jpg';
+      return '${originalPath}_adjusted_$safeTag.jpg';
     }
-    return '${originalPath.substring(0, lastDot)}_adjusted${originalPath.substring(lastDot)}';
+    return '${originalPath.substring(0, lastDot)}_adjusted_$safeTag${originalPath.substring(lastDot)}';
   }
 
   Future<File?> preprocessForDetection(

@@ -1,5 +1,6 @@
-import 'dart:io';
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/scan_pipeline_models.dart';
 import '../pages/corner_adjust_page.dart';
@@ -28,13 +29,15 @@ class _ImageEditPageState extends State<ImageEditPage> {
   final DocumentScannerService _scannerService = DocumentScannerService();
 
   int _currentPage = 0;
-  bool _isProcessing = false;
+  bool _isCommitting = false;
   final Set<int> _dirtyPages = <int>{};
   late List<File> _previewImages;
+  late List<File?> _renderedOutputs;
   late List<File?> _manualPerspectiveBases;
   late List<EditSessionState> _sessions;
+  late List<int> _previewTokens;
+  late List<int> _renderInFlightCounts;
   Timer? _previewDebounce;
-  bool _pendingPreviewApply = false;
 
   @override
   void initState() {
@@ -55,6 +58,9 @@ class _ImageEditPageState extends State<ImageEditPage> {
         outputFile: output,
       );
     });
+    _renderedOutputs = List<File?>.from(_previewImages);
+    _previewTokens = List<int>.filled(widget.images.length, 0);
+    _renderInFlightCounts = List<int>.filled(widget.images.length, 0);
   }
 
   @override
@@ -64,6 +70,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
   }
 
   EditSessionState get _currentSession => _sessions[_currentPage];
+  bool get _isCurrentPageRendering => _renderInFlightCounts[_currentPage] > 0;
 
   @override
   Widget build(BuildContext context) {
@@ -81,7 +88,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
         ),
         actions: [
           TextButton(
-            onPressed: _isProcessing ? null : _continueToResult,
+            onPressed: _isCommitting ? null : _continueToResult,
             child: const Text(
               'Continue',
               style: TextStyle(
@@ -92,13 +99,27 @@ class _ImageEditPageState extends State<ImageEditPage> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(child: _buildImagePreview()),
-          _buildPageSelector(),
-          _buildPipelineInfo(),
-          _buildControls(),
-        ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final minPreviewHeight = math.min(
+            320.0,
+            constraints.maxHeight * 0.55,
+          );
+          final maxPreviewHeight = math.max(
+            minPreviewHeight,
+            constraints.maxHeight - 260,
+          );
+          final previewHeight = (constraints.maxHeight * 0.72)
+              .clamp(minPreviewHeight, maxPreviewHeight)
+              .toDouble();
+
+          return Column(
+            children: [
+              SizedBox(height: previewHeight, child: _buildImagePreview()),
+              Expanded(child: _buildBottomPanel()),
+            ],
+          );
+        },
       ),
     );
   }
@@ -109,29 +130,155 @@ class _ImageEditPageState extends State<ImageEditPage> {
     }
 
     return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.1),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+      child: Stack(
+        children: [
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.1),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
+                ),
+              ],
             ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.0,
+                child: Center(
+                  child: Image.file(
+                    _previewImages[_currentPage],
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Center(child: Text('Unable to load image'));
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (_isCurrentPageRendering || _isCommitting)
+            Positioned(
+              right: 12,
+              top: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.66),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Updating',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomPanel() {
+    final pipelineInfo = _buildPipelineInfo();
+
+    return Container(
+      width: double.infinity,
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildPageSelector(),
+            if (pipelineInfo != null) ...[
+              const SizedBox(height: 10),
+              pipelineInfo,
+            ],
+            const SizedBox(height: 12),
+            _buildEditStateBanner(),
+            const SizedBox(height: 12),
+            _buildControls(),
           ],
         ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: Image.file(
-            _previewImages[_currentPage],
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return const Center(child: Text('Unable to load image'));
-            },
+      ),
+    );
+  }
+
+  Widget _buildEditStateBanner() {
+    final isDirty = _dirtyPages.contains(_currentPage);
+    final isBusy = _isCurrentPageRendering || _isCommitting;
+    final text = isBusy
+        ? 'Applying latest changes...'
+        : isDirty
+        ? 'Unsaved changes on this page'
+        : 'Changes applied';
+    final color = isBusy
+        ? Colors.blueGrey
+        : isDirty
+        ? Colors.orange
+        : Colors.green;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isBusy
+                ? Icons.autorenew
+                : isDirty
+                ? Icons.pending_actions
+                : Icons.check_circle,
+            size: 18,
+            color: color.shade700,
           ),
-        ),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: TextStyle(
+              color: color.shade700,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -162,12 +309,12 @@ class _ImageEditPageState extends State<ImageEditPage> {
     );
   }
 
-  Widget _buildPipelineInfo() {
+  Widget? _buildPipelineInfo() {
     final pipeline = _currentPage < widget.pipelineResults.length
         ? widget.pipelineResults[_currentPage]
         : null;
 
-    if (pipeline == null) return const SizedBox.shrink();
+    if (pipeline == null) return null;
 
     final confidence = (pipeline.detectionConfidence * 100)
         .clamp(0, 100)
@@ -199,132 +346,111 @@ class _ImageEditPageState extends State<ImageEditPage> {
 
   Widget _buildControls() {
     final session = _currentSession;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSlider(
+          'Brightness',
+          session.brightness,
+          0.2,
+          2.5,
+          (v) {
+            _updateCurrentSession(session.copyWith(brightness: v));
+            _schedulePreviewApply();
+          },
+          () => _renderPagePreview(_currentPage),
+        ),
+        _buildSlider('Contrast', session.contrast, 0.2, 2.0, (v) {
+          _updateCurrentSession(session.copyWith(contrast: v));
+          _schedulePreviewApply();
+        }, () => _renderPagePreview(_currentPage)),
+        const SizedBox(height: 14),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _isCommitting ? null : _openCornerAdjust,
+            icon: const Icon(Icons.crop_free),
+            label: const Text('Adjust Corners'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.text,
+              side: const BorderSide(color: AppColors.border),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text('Filters', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: DocumentFilterMode.values.map((mode) {
+            return ChoiceChip(
+              label: Text(mode.label),
+              selected: session.filterMode == mode,
+              onSelected: _isCommitting
+                  ? null
+                  : (_) {
+                      _updateCurrentSession(session.copyWith(filterMode: mode));
+                      _renderPagePreview(_currentPage);
+                    },
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 16),
+        const Text('Rotation', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            _buildSlider(
-              'Brightness',
-              session.brightness,
-              0.2,
-              2.5,
-              (v) {
-                _updateCurrentSession(session.copyWith(brightness: v));
-                _schedulePreviewApply();
-              },
-              () {
-                _schedulePreviewApply();
-              },
-            ),
-            _buildSlider(
-              'Contrast',
-              session.contrast,
-              0.2,
-              2.0,
-              (v) {
-                _updateCurrentSession(session.copyWith(contrast: v));
-                _schedulePreviewApply();
-              },
-              () {
-                _schedulePreviewApply();
-              },
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: _isProcessing ? null : _openCornerAdjust,
-                icon: const Icon(Icons.crop_free),
-                label: const Text('Adjust Corners'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.text,
-                  side: const BorderSide(color: AppColors.border),
+            _buildRotateBtn(Icons.rotate_left, 'Left', () {
+              _updateCurrentSession(
+                session.copyWith(rotation: session.rotation - 90),
+              );
+              _renderPagePreview(_currentPage);
+            }),
+            _buildRotateBtn(Icons.rotate_right, 'Right', () {
+              _updateCurrentSession(
+                session.copyWith(rotation: session.rotation + 90),
+              );
+              _renderPagePreview(_currentPage);
+            }),
+            _buildRotateBtn(Icons.restore, 'Reset', () {
+              _updateCurrentSession(
+                session.copyWith(
+                  brightness: 1.0,
+                  contrast: 1.0,
+                  rotation: 0.0,
+                  filterMode: DocumentFilterMode.original,
                 ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Filters',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: DocumentFilterMode.values.map((mode) {
-                return ChoiceChip(
-                  label: Text(mode.label),
-                  selected: session.filterMode == mode,
-                  onSelected: (_) {
-                    _updateCurrentSession(session.copyWith(filterMode: mode));
-                    _schedulePreviewApply();
-                  },
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Rotation',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _buildRotateBtn(Icons.rotate_left, 'Left', () {
-                  _updateCurrentSession(
-                    session.copyWith(rotation: session.rotation - 90),
-                  );
-                  _schedulePreviewApply();
-                }),
-                _buildRotateBtn(Icons.rotate_right, 'Right', () {
-                  _updateCurrentSession(
-                    session.copyWith(rotation: session.rotation + 90),
-                  );
-                  _schedulePreviewApply();
-                }),
-                _buildRotateBtn(Icons.restore, 'Reset', () {
-                  _updateCurrentSession(
-                    session.copyWith(
-                      brightness: 1.0,
-                      contrast: 1.0,
-                      rotation: 0.0,
-                      filterMode: DocumentFilterMode.original,
-                    ),
-                  );
-                  _schedulePreviewApply();
-                }),
-              ],
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isProcessing ? null : _applyCurrentPage,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.text,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                child: _isProcessing
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Apply This Page'),
-              ),
-            ),
+              );
+              _renderPagePreview(_currentPage);
+            }),
           ],
         ),
-      ),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: (_isCommitting || _isCurrentPageRendering)
+                ? null
+                : _applyCurrentPage,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.text,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: (_isCommitting || _isCurrentPageRendering)
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text('Apply This Page'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -348,8 +474,8 @@ class _ImageEditPageState extends State<ImageEditPage> {
           min: min,
           max: max,
           activeColor: AppColors.text,
-          onChanged: onChanged,
-          onChangeEnd: (_) => onChangeEnd(),
+          onChanged: _isCommitting ? null : onChanged,
+          onChangeEnd: _isCommitting ? null : (_) => onChangeEnd(),
         ),
       ],
     );
@@ -357,7 +483,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
 
   Widget _buildRotateBtn(IconData icon, String label, VoidCallback onTap) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: _isCommitting ? null : onTap,
       child: Column(
         children: [
           Container(
@@ -380,42 +506,26 @@ class _ImageEditPageState extends State<ImageEditPage> {
   void _updateCurrentSession(EditSessionState updated) {
     setState(() {
       _sessions[_currentPage] = updated.copyWith(clearOutputFile: true);
+      _renderedOutputs[_currentPage] = null;
       _dirtyPages.add(_currentPage);
     });
   }
 
   void _schedulePreviewApply() {
-    _pendingPreviewApply = true;
+    final pageIndex = _currentPage;
     _previewDebounce?.cancel();
-    _previewDebounce = Timer(const Duration(milliseconds: 220), () async {
+    _previewDebounce = Timer(const Duration(milliseconds: 180), () async {
       if (!mounted) return;
-      await _applyCurrentPage();
+      await _renderPagePreview(pageIndex);
     });
   }
 
-  Future<void> _applyCurrentPage() async {
-    if (_isProcessing) {
-      _pendingPreviewApply = true;
-      return;
-    }
-
-    _pendingPreviewApply = false;
-    setState(() => _isProcessing = true);
-    try {
-      await _applyPage(_currentPage);
-    } finally {
-      if (mounted) {
-        setState(() => _isProcessing = false);
-        if (_pendingPreviewApply) {
-          _schedulePreviewApply();
-        }
-      }
-    }
-  }
-
-  Future<void> _applyPage(int index) async {
-    if (index < 0 || index >= _sessions.length) return;
-
+  Future<File> _renderAdjustedFile(
+    int index, {
+    required String tagPrefix,
+    int? maxDimension,
+    int quality = 95,
+  }) async {
     final session = _sessions[index];
     final pipeline = index < widget.pipelineResults.length
         ? widget.pipelineResults[index]
@@ -423,6 +533,8 @@ class _ImageEditPageState extends State<ImageEditPage> {
     final manualBase = _manualPerspectiveBases[index];
     final base = manualBase ?? pipeline?.croppedFile ?? widget.images[index];
     final filterCode = _filterCodeForMode(session.filterMode);
+    final tag =
+        '${tagPrefix}_p${index}_${DateTime.now().microsecondsSinceEpoch}';
 
     final adjusted = await _scannerService.applyAdjustments(
       base,
@@ -430,15 +542,84 @@ class _ImageEditPageState extends State<ImageEditPage> {
       contrast: session.contrast,
       rotation: session.rotation,
       filter: filterCode,
+      outputTag: tag,
+      maxDimension: maxDimension,
+      quality: quality,
     );
+    return adjusted ?? base;
+  }
 
+  Future<void> _renderPagePreview(int index) async {
+    if (index < 0 || index >= _sessions.length) return;
+    final token = ++_previewTokens[index];
+    _incrementRenderCount(index);
+    try {
+      final rendered = await _renderAdjustedFile(
+        index,
+        tagPrefix: 'preview',
+        maxDimension: 1700,
+        quality: 90,
+      );
+      if (!mounted || token != _previewTokens[index]) return;
+      setState(() {
+        _previewImages[index] = rendered;
+        _renderedOutputs[index] = rendered;
+      });
+    } finally {
+      _decrementRenderCount(index);
+    }
+  }
+
+  void _incrementRenderCount(int index) {
     if (!mounted) return;
-
     setState(() {
-      _previewImages[index] = adjusted ?? base;
-      _sessions[index] = session.copyWith(outputFile: adjusted ?? base);
-      _dirtyPages.remove(index);
+      _renderInFlightCounts[index] = _renderInFlightCounts[index] + 1;
     });
+  }
+
+  void _decrementRenderCount(int index) {
+    if (!mounted) return;
+    setState(() {
+      _renderInFlightCounts[index] = math.max(
+        0,
+        _renderInFlightCounts[index] - 1,
+      );
+    });
+  }
+
+  Future<void> _applyCurrentPage() async {
+    if (_isCommitting) return;
+    _previewDebounce?.cancel();
+    setState(() => _isCommitting = true);
+    try {
+      await _applyPage(_currentPage);
+    } finally {
+      if (mounted) {
+        setState(() => _isCommitting = false);
+      }
+    }
+  }
+
+  Future<void> _applyPage(int index) async {
+    if (index < 0 || index >= _sessions.length) return;
+    ++_previewTokens[index];
+    _incrementRenderCount(index);
+    try {
+      final rendered = await _renderAdjustedFile(
+        index,
+        tagPrefix: 'applied',
+        quality: 95,
+      );
+      if (!mounted) return;
+      setState(() {
+        _previewImages[index] = rendered;
+        _renderedOutputs[index] = rendered;
+        _sessions[index] = _sessions[index].copyWith(outputFile: rendered);
+        _dirtyPages.remove(index);
+      });
+    } finally {
+      _decrementRenderCount(index);
+    }
   }
 
   int _filterCodeForMode(DocumentFilterMode mode) {
@@ -482,7 +663,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
       return;
     }
 
-    setState(() => _isProcessing = true);
+    setState(() => _isCommitting = true);
     try {
       final warped = await _scannerService.applyPerspectiveFromCorners(
         source,
@@ -494,24 +675,30 @@ class _ImageEditPageState extends State<ImageEditPage> {
 
       setState(() {
         _manualPerspectiveBases[index] = warped;
+        _renderedOutputs[index] = null;
         _sessions[index] = _sessions[index].copyWith(clearOutputFile: true);
         _dirtyPages.add(index);
       });
-      await _applyPage(index);
+      await _renderPagePreview(index);
     } finally {
       if (mounted) {
-        setState(() => _isProcessing = false);
+        setState(() => _isCommitting = false);
       }
     }
   }
 
   Future<void> _continueToResult() async {
-    if (_isProcessing) return;
+    if (_isCommitting) return;
 
     _previewDebounce?.cancel();
-    setState(() => _isProcessing = true);
+    setState(() => _isCommitting = true);
     try {
-      final pagesToApply = _dirtyPages.toList(growable: false);
+      final pagesToApply = <int>[];
+      for (var i = 0; i < _sessions.length; i++) {
+        if (_dirtyPages.contains(i) || _sessions[i].outputFile == null) {
+          pagesToApply.add(i);
+        }
+      }
       for (final index in pagesToApply) {
         await _applyPage(index);
       }
@@ -519,7 +706,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
       widget.onContinue(_sessions);
     } finally {
       if (mounted) {
-        setState(() => _isProcessing = false);
+        setState(() => _isCommitting = false);
       }
     }
   }
