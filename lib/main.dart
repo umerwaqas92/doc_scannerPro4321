@@ -97,25 +97,31 @@ class _MainScreenState extends State<MainScreen> {
       _showScannerError('No clear document detected. Try again.');
       return;
     }
-    _validateLastCapturedDocument(beforeCount);
+    final isValid = _validateLastCapturedDocument(beforeCount);
+    if (isValid) {
+      await _openEditFromScanner();
+    }
   }
 
   Future<void> _onScannerAddFromGallery() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
     await appState.addImageFromGallery();
-    _validateLastCapturedDocument(
+    final isValid = _validateLastCapturedDocument(
       beforeCount,
       errorMessage: 'Selected image is not a clear document. Try again.',
     );
+    if (isValid) {
+      await _openEditFromScanner();
+    }
   }
 
-  void _validateLastCapturedDocument(
+  bool _validateLastCapturedDocument(
     int previousCount, {
     String errorMessage = 'No clear document detected. Try again.',
   }) {
     final appState = context.read<AppState>();
-    if (appState.capturedImages.length <= previousCount) return;
+    if (appState.capturedImages.length <= previousCount) return false;
 
     final index = appState.capturedImages.length - 1;
     final pipeline = index < appState.pipelineResults.length
@@ -127,10 +133,22 @@ class _MainScreenState extends State<MainScreen> {
         pipeline.detectionConfidence < 0.18 ||
         (pipeline.usedFallback && pipeline.detectionConfidence < 0.34);
 
-    if (!invalidDocument) return;
+    if (!invalidDocument) return true;
 
     appState.removeCapturedImage(index);
     _showScannerError(errorMessage);
+    return false;
+  }
+
+  Future<void> _openEditFromScanner() async {
+    if (!mounted) return;
+    final appState = context.read<AppState>();
+    setState(() {
+      _showScanner = false;
+      _showEdit = true;
+      _showResult = false;
+    });
+    await appState.disposeCamera();
   }
 
   void _showScannerError(String message) {
