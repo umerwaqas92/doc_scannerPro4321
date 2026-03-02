@@ -17,13 +17,16 @@ class ScanPipelineService {
   Future<ScanPipelineResult?> run(
     File input, {
     ScanPipelineOptions options = const ScanPipelineOptions(),
+    void Function(ScanStage stage, String message)? onStage,
   }) async {
     final stageStatus = <ScanStage, StageState>{};
     stageStatus[ScanStage.capture] = const StageState(
       completed: true,
       message: 'Image captured',
     );
+    onStage?.call(ScanStage.capture, 'Image captured');
 
+    File normalizedInput = input;
     File preprocessed = input;
     File perspective = input;
     File cropped = input;
@@ -32,25 +35,35 @@ class ScanPipelineService {
     try {
       stageStatus[ScanStage.preprocess] = const StageState(
         completed: false,
+        message: 'Normalizing orientation',
+      );
+      onStage?.call(ScanStage.preprocess, 'Normalizing orientation');
+      normalizedInput = await _normalizeOrientation(input);
+
+      stageStatus[ScanStage.preprocess] = const StageState(
+        completed: false,
         message: 'Pre-processing image',
       );
+      onStage?.call(ScanStage.preprocess, 'Pre-processing image');
       preprocessed =
           await _scannerService.preprocessForDetection(
-            input,
+            normalizedInput,
             maxHeight: options.maxDimension,
           ) ??
-          input;
+          normalizedInput;
       stageStatus[ScanStage.preprocess] = const StageState(
         completed: true,
         message: 'Pre-processing complete',
       );
+      onStage?.call(ScanStage.preprocess, 'Pre-processing complete');
 
       stageStatus[ScanStage.detectEdges] = const StageState(
         completed: false,
         message: 'Detecting document edges',
       );
+      onStage?.call(ScanStage.detectEdges, 'Detecting document edges');
       detected = await _analyzer.detectDocument(
-        input,
+        normalizedInput,
         minConfidence: options.minConfidence,
       );
       stageStatus[ScanStage.detectEdges] = StageState(
@@ -59,48 +72,61 @@ class ScanPipelineService {
             ? 'Detection fallback used'
             : 'Edges detected',
       );
+      onStage?.call(
+        ScanStage.detectEdges,
+        detected.isFallback ? 'Detection fallback used' : 'Edges detected',
+      );
 
       stageStatus[ScanStage.perspectiveCorrection] = const StageState(
         completed: false,
         message: 'Applying perspective correction',
+      );
+      onStage?.call(
+        ScanStage.perspectiveCorrection,
+        'Applying perspective correction',
       );
       final points = detected.corners
           .map((c) => ScanPoint(c.x, c.y))
           .toList(growable: false);
       perspective =
           await _scannerService.applyPerspectiveFromCorners(
-            input,
+            normalizedInput,
             points,
             suffix: 'warped',
           ) ??
-          input;
+          normalizedInput;
       stageStatus[ScanStage.perspectiveCorrection] = const StageState(
         completed: true,
         message: 'Perspective corrected',
       );
+      onStage?.call(ScanStage.perspectiveCorrection, 'Perspective corrected');
 
       stageStatus[ScanStage.crop] = const StageState(
         completed: false,
         message: 'Auto-cropping document',
       );
+      onStage?.call(ScanStage.crop, 'Auto-cropping document');
       cropped = await _autoCropDocument(perspective);
       stageStatus[ScanStage.crop] = const StageState(
         completed: true,
         message: 'Auto-crop complete',
       );
+      onStage?.call(ScanStage.crop, 'Auto-crop complete');
 
       stageStatus[ScanStage.enhance] = const StageState(
         completed: false,
         message: 'Generating enhancement variants',
       );
+      onStage?.call(ScanStage.enhance, 'Generating enhancement variants');
       final variants = await _buildEnhancementVariants(cropped);
       stageStatus[ScanStage.enhance] = const StageState(
         completed: true,
         message: 'Enhancement complete',
       );
+      onStage?.call(ScanStage.enhance, 'Enhancement complete');
 
       return ScanPipelineResult(
-        originalFile: input,
+        originalFile: normalizedInput,
         preprocessedFile: preprocessed,
         perspectiveFile: perspective,
         croppedFile: cropped,
@@ -112,6 +138,21 @@ class ScanPipelineService {
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<File> _normalizeOrientation(File source) async {
+    try {
+      final bytes = await source.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return source;
+
+      final oriented = img.bakeOrientation(decoded);
+      final output = File(_buildDerivedPath(source.path, 'oriented'));
+      await output.writeAsBytes(img.encodeJpg(oriented, quality: 96));
+      return output;
+    } catch (_) {
+      return source;
     }
   }
 
@@ -159,6 +200,12 @@ class ScanPipelineService {
       bottom--;
     }
 
+    // Keep a small safety margin so auto-crop does not clip text near edges.
+    left = (left - (width * 0.015).round()).clamp(0, width - 1);
+    right = (right + (width * 0.015).round()).clamp(0, width - 1);
+    top = (top - (height * 0.015).round()).clamp(0, height - 1);
+    bottom = (bottom + (height * 0.015).round()).clamp(0, height - 1);
+
     final cropWidth = right - left + 1;
     final cropHeight = bottom - top + 1;
     final enoughArea = cropWidth > width * 0.6 && cropHeight > height * 0.6;
@@ -204,6 +251,21 @@ class ScanPipelineService {
     final colorFile = File(_buildDerivedPath(source.path, 'color_plus'));
     await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 95));
     variants[DocumentFilterMode.colorEnhanced] = colorFile;
+
+    final textPlus = _highContrastText(decoded);
+    final textPlusFile = File(_buildDerivedPath(source.path, 'text_plus'));
+    await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 95));
+    variants[DocumentFilterMode.highContrastText] = textPlusFile;
+
+    final warm = _warmPaper(decoded);
+    final warmFile = File(_buildDerivedPath(source.path, 'warm_paper'));
+    await warmFile.writeAsBytes(img.encodeJpg(warm, quality: 95));
+    variants[DocumentFilterMode.warmPaper] = warmFile;
+
+    final photo = _photoNatural(decoded);
+    final photoFile = File(_buildDerivedPath(source.path, 'photo_natural'));
+    await photoFile.writeAsBytes(img.encodeJpg(photo, quality: 95));
+    variants[DocumentFilterMode.photoNatural] = photoFile;
 
     return variants;
   }
@@ -253,6 +315,26 @@ class ScanPipelineService {
     }
     enhanced = img.gaussianBlur(output, radius: 1);
     return img.adjustColor(enhanced, contrast: 1.08);
+  }
+
+  img.Image _highContrastText(img.Image source) {
+    final gray = img.grayscale(source);
+    final bw = _toStrongBlackWhite(gray);
+    return img.adjustColor(bw, contrast: 1.55, brightness: 1.07);
+  }
+
+  img.Image _warmPaper(img.Image source) {
+    final sepia = img.sepia(source, amount: 0.2);
+    return img.adjustColor(sepia, contrast: 1.08, brightness: 1.03);
+  }
+
+  img.Image _photoNatural(img.Image source) {
+    return img.adjustColor(
+      source,
+      contrast: 1.08,
+      saturation: 1.04,
+      brightness: 1.02,
+    );
   }
 
   String _buildDerivedPath(String originalPath, String suffix) {

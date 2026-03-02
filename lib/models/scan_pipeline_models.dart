@@ -12,7 +12,15 @@ enum ScanStage {
   save,
 }
 
-enum DocumentFilterMode { original, blackWhite, grayscale, colorEnhanced }
+enum DocumentFilterMode {
+  original,
+  blackWhite,
+  grayscale,
+  colorEnhanced,
+  highContrastText,
+  warmPaper,
+  photoNatural,
+}
 
 extension DocumentFilterModeX on DocumentFilterMode {
   String get label {
@@ -25,6 +33,12 @@ extension DocumentFilterModeX on DocumentFilterMode {
         return 'Grayscale';
       case DocumentFilterMode.colorEnhanced:
         return 'Color+';
+      case DocumentFilterMode.highContrastText:
+        return 'Text+';
+      case DocumentFilterMode.warmPaper:
+        return 'Warm';
+      case DocumentFilterMode.photoNatural:
+        return 'Photo';
     }
   }
 }

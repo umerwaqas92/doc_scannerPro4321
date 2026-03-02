@@ -45,6 +45,8 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
           );
           if (_corners.length != 4) {
             _corners = _defaultCorners(_imageSize!);
+          } else {
+            _corners = _normalizeCorners(_corners, _imageSize!);
           }
           _loading = false;
         });
@@ -67,6 +69,24 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
       ScanCorner(size.width - marginX, size.height - marginY),
       ScanCorner(marginX, size.height - marginY),
     ];
+  }
+
+  List<ScanCorner> _normalizeCorners(List<ScanCorner> input, Size size) {
+    final clamped = input
+        .map(
+          (c) => ScanCorner(
+            c.x.clamp(0, size.width).toDouble(),
+            c.y.clamp(0, size.height).toDouble(),
+          ),
+        )
+        .toList(growable: false);
+
+    final sorted = List<ScanCorner>.from(clamped)
+      ..sort((a, b) => a.y.compareTo(b.y));
+    final top = sorted.take(2).toList()..sort((a, b) => a.x.compareTo(b.x));
+    final bottom = sorted.skip(2).toList()..sort((a, b) => a.x.compareTo(b.x));
+
+    return [top[0], top[1], bottom[1], bottom[0]];
   }
 
   @override

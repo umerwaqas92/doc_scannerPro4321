@@ -1,16 +1,20 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 class ScannerPage extends StatefulWidget {
   final VoidCallback onCancel;
   final VoidCallback onDone;
-  final VoidCallback onCapture;
-  final VoidCallback onAddFromGallery;
+  final Future<void> Function() onCapture;
+  final Future<void> Function() onAddFromGallery;
   final CameraController? cameraController;
   final bool isCameraInitialized;
+  final bool isAnalyzing;
+  final String? analysisStageText;
+  final int selectedFilterIndex;
+  final ValueChanged<int> onFilterChanged;
   final List<File> capturedImages;
   final Function(int) onRemoveImage;
 
@@ -22,6 +26,10 @@ class ScannerPage extends StatefulWidget {
     required this.onAddFromGallery,
     required this.cameraController,
     required this.isCameraInitialized,
+    required this.isAnalyzing,
+    required this.analysisStageText,
+    required this.selectedFilterIndex,
+    required this.onFilterChanged,
     required this.capturedImages,
     required this.onRemoveImage,
   });
@@ -32,21 +40,50 @@ class ScannerPage extends StatefulWidget {
 
 class _ScannerPageState extends State<ScannerPage> {
   int _selectedFilter = 0;
-  final List<String> _filters = ['Auto', 'B&W', 'Color', 'Grayscale', 'Photo'];
+  final List<String> _filters = [
+    'Auto',
+    'B&W',
+    'Color',
+    'Grayscale',
+    'Text+',
+    'Warm',
+    'Photo',
+  ];
 
-  bool _isScanning = false;
   bool _isStable = false;
-  int _stableFrames = 0;
+  bool _isCaptureActionPending = false;
+
+  bool get _isBusy => _isCaptureActionPending || widget.isAnalyzing;
 
   @override
   void initState() {
     super.initState();
+    _selectedFilter = widget.selectedFilterIndex.clamp(0, _filters.length - 1);
     _startStabilityCheck();
+  }
+
+  @override
+  void didUpdateWidget(covariant ScannerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.selectedFilterIndex != oldWidget.selectedFilterIndex) {
+      _selectedFilter = widget.selectedFilterIndex.clamp(
+        0,
+        _filters.length - 1,
+      );
+    }
+
+    if (widget.capturedImages.length > oldWidget.capturedImages.length) {
+      setState(() {
+        _isStable = false;
+      });
+      _startStabilityCheck();
+    }
   }
 
   void _startStabilityCheck() {
     Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted && !_isScanning) {
+      if (mounted && !_isBusy) {
         setState(() {
           _isStable = true;
         });
@@ -54,15 +91,16 @@ class _ScannerPageState extends State<ScannerPage> {
     });
   }
 
-  @override
-  void didUpdateWidget(ScannerPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.capturedImages.length > oldWidget.capturedImages.length) {
-      setState(() {
-        _isStable = false;
-      });
-      _startStabilityCheck();
+  double _previewAspectRatio() {
+    if (widget.cameraController == null ||
+        !widget.isCameraInitialized ||
+        !widget.cameraController!.value.isInitialized) {
+      return 3 / 4;
     }
+
+    final controllerAspect = widget.cameraController!.value.aspectRatio;
+    final portraitAspect = (1 / controllerAspect).clamp(0.6, 1.6);
+    return portraitAspect;
   }
 
   @override
@@ -89,7 +127,7 @@ class _ScannerPageState extends State<ScannerPage> {
               ),
             ],
           ),
-          if (_isScanning) _buildScanningOverlay(),
+          if (_isBusy) _buildScanningOverlay(),
         ],
       ),
     );
@@ -101,7 +139,7 @@ class _ScannerPageState extends State<ScannerPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _buildHeaderButton('✕ Cancel', widget.onCancel),
+          _buildHeaderButton('✕ Cancel', widget.onCancel, !_isBusy),
           Text(
             widget.capturedImages.isEmpty
                 ? 'Scan Document'
@@ -112,27 +150,30 @@ class _ScannerPageState extends State<ScannerPage> {
               color: Colors.white,
             ),
           ),
-          _buildHeaderButton('Done', widget.onDone),
+          _buildHeaderButton('Done', widget.onDone, !_isBusy),
         ],
       ),
     );
   }
 
-  Widget _buildHeaderButton(String text, VoidCallback onTap) {
+  Widget _buildHeaderButton(String text, VoidCallback onTap, bool enabled) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Text(
-          text,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-            color: Colors.white,
+      onTap: enabled ? onTap : null,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.45,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+              color: Colors.white,
+            ),
           ),
         ),
       ),
@@ -142,23 +183,25 @@ class _ScannerPageState extends State<ScannerPage> {
   Widget _buildCameraPreview() {
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      height: 380,
       decoration: BoxDecoration(
         color: Colors.black,
         borderRadius: BorderRadius.circular(16),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            widget.isCameraInitialized &&
-                    widget.cameraController != null &&
-                    widget.cameraController!.value.isInitialized
-                ? CameraPreview(widget.cameraController!)
-                : _buildCameraPlaceholder(),
-            _buildViewfinderOverlay(),
-          ],
+        child: AspectRatio(
+          aspectRatio: _previewAspectRatio(),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              widget.isCameraInitialized &&
+                      widget.cameraController != null &&
+                      widget.cameraController!.value.isInitialized
+                  ? CameraPreview(widget.cameraController!)
+                  : _buildCameraPlaceholder(),
+              _buildViewfinderOverlay(),
+            ],
+          ),
         ),
       ),
     );
@@ -187,37 +230,43 @@ class _ScannerPageState extends State<ScannerPage> {
     return Stack(
       children: [
         Center(
-          child: Container(
-            width: 220,
-            height: 290,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: _isStable
-                    ? Colors.green
-                    : Colors.white.withValues(alpha: 0.7),
-                width: 2,
+          child: FractionallySizedBox(
+            widthFactor: 0.72,
+            heightFactor: 0.72,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: _isStable
+                      ? Colors.green
+                      : Colors.white.withValues(alpha: 0.7),
+                  width: 2,
+                ),
+                borderRadius: BorderRadius.circular(8),
               ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Stack(
-              children: [
-                Positioned(top: -2, left: -2, child: _buildCorner(true, true)),
-                Positioned(
-                  top: -2,
-                  right: -2,
-                  child: _buildCorner(true, false),
-                ),
-                Positioned(
-                  bottom: -2,
-                  left: -2,
-                  child: _buildCorner(false, true),
-                ),
-                Positioned(
-                  bottom: -2,
-                  right: -2,
-                  child: _buildCorner(false, false),
-                ),
-              ],
+              child: Stack(
+                children: [
+                  Positioned(
+                    top: -2,
+                    left: -2,
+                    child: _buildCorner(true, true),
+                  ),
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: _buildCorner(true, false),
+                  ),
+                  Positioned(
+                    bottom: -2,
+                    left: -2,
+                    child: _buildCorner(false, true),
+                  ),
+                  Positioned(
+                    bottom: -2,
+                    right: -2,
+                    child: _buildCorner(false, false),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -263,16 +312,16 @@ class _ScannerPageState extends State<ScannerPage> {
       decoration: BoxDecoration(
         border: Border(
           top: isTop
-              ? BorderSide(color: Colors.white, width: 3)
+              ? const BorderSide(color: Colors.white, width: 3)
               : BorderSide.none,
           bottom: !isTop
-              ? BorderSide(color: Colors.white, width: 3)
+              ? const BorderSide(color: Colors.white, width: 3)
               : BorderSide.none,
           left: isLeft
-              ? BorderSide(color: Colors.white, width: 3)
+              ? const BorderSide(color: Colors.white, width: 3)
               : BorderSide.none,
           right: !isLeft
-              ? BorderSide(color: Colors.white, width: 3)
+              ? const BorderSide(color: Colors.white, width: 3)
               : BorderSide.none,
         ),
         borderRadius: BorderRadius.only(
@@ -295,25 +344,38 @@ class _ScannerPageState extends State<ScannerPage> {
         children: List.generate(_filters.length, (index) {
           final isSelected = _selectedFilter == index;
           return GestureDetector(
-            onTap: () => setState(() => _selectedFilter = index),
-            child: Container(
-              margin: const EdgeInsets.only(right: 10),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.white : Colors.transparent,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: isSelected ? 1 : 0.18),
+            onTap: _isBusy
+                ? null
+                : () {
+                    setState(() => _selectedFilter = index);
+                    widget.onFilterChanged(index);
+                  },
+            child: Opacity(
+              opacity: _isBusy ? 0.5 : 1,
+              child: Container(
+                margin: const EdgeInsets.only(right: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
                 ),
-              ),
-              child: Text(
-                _filters[index],
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: isSelected
-                      ? Colors.black
-                      : Colors.white.withValues(alpha: 0.65),
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.white : Colors.transparent,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: isSelected ? 1 : 0.18,
+                    ),
+                  ),
+                ),
+                child: Text(
+                  _filters[index],
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: isSelected
+                        ? Colors.black
+                        : Colors.white.withValues(alpha: 0.65),
+                  ),
                 ),
               ),
             ),
@@ -331,81 +393,88 @@ class _ScannerPageState extends State<ScannerPage> {
         children: [
           _buildCtrlButton(
             Icons.photo_library_outlined,
-            widget.onAddFromGallery,
+            _onAddFromGallery,
+            !_isBusy,
           ),
           _buildCaptureButton(),
-          _buildCtrlButton(Icons.flip_outlined, () {}),
+          _buildCtrlButton(Icons.flip_outlined, () {}, !_isBusy),
         ],
       ),
     );
   }
 
-  Widget _buildCtrlButton(IconData icon, VoidCallback onTap) {
+  Widget _buildCtrlButton(IconData icon, VoidCallback onTap, bool enabled) {
     return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 48,
-        height: 48,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+      onTap: enabled ? onTap : null,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.5,
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+          ),
+          child: Icon(icon, size: 22, color: Colors.white),
         ),
-        child: Icon(icon, size: 22, color: Colors.white),
       ),
     );
   }
 
   Widget _buildCaptureButton() {
     return GestureDetector(
-      onTap: _onCapture,
-      child: Container(
-        width: 72,
-        height: 72,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 4),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.3),
-              blurRadius: 10,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
+      onTap: _isBusy ? null : _onCapture,
+      child: Opacity(
+        opacity: _isBusy ? 0.6 : 1,
         child: Container(
-          margin: const EdgeInsets.all(3),
+          width: 72,
+          height: 72,
           decoration: BoxDecoration(
-            color: Colors.white,
             shape: BoxShape.circle,
-            border: Border.all(color: AppColors.green, width: 3),
+            border: Border.all(color: Colors.white, width: 4),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.3),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
           ),
-          child: Center(
-            child: _isScanning
-                ? const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(
-                      color: AppColors.green,
-                      strokeWidth: 3,
+          child: Container(
+            margin: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: AppColors.green, width: 3),
+            ),
+            child: Center(
+              child: _isBusy
+                  ? const SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: CircularProgressIndicator(
+                        color: AppColors.green,
+                        strokeWidth: 3,
+                      ),
+                    )
+                  : Container(
+                      width: 24,
+                      height: 24,
+                      decoration: const BoxDecoration(
+                        color: AppColors.green,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  )
-                : Container(
-                    width: 24,
-                    height: 24,
-                    decoration: const BoxDecoration(
-                      color: AppColors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  void _onCapture() {
-    if (_isScanning) return;
+  Future<void> _onCapture() async {
+    if (_isBusy) return;
 
     if (!_isStable) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -418,24 +487,41 @@ class _ScannerPageState extends State<ScannerPage> {
     }
 
     setState(() {
-      _isScanning = true;
+      _isCaptureActionPending = true;
       _isStable = false;
     });
 
-    widget.onCapture();
-
-    Future.delayed(const Duration(seconds: 2), () {
+    try {
+      await widget.onCapture();
+    } finally {
       if (mounted) {
         setState(() {
-          _isScanning = false;
+          _isCaptureActionPending = false;
         });
       }
+    }
+  }
+
+  Future<void> _onAddFromGallery() async {
+    if (_isBusy) return;
+    setState(() {
+      _isCaptureActionPending = true;
     });
+
+    try {
+      await widget.onAddFromGallery();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCaptureActionPending = false;
+        });
+      }
+    }
   }
 
   Widget _buildScanningOverlay() {
     return Container(
-      color: Colors.black.withValues(alpha: 0.6),
+      color: Colors.black.withValues(alpha: 0.62),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -455,26 +541,32 @@ class _ScannerPageState extends State<ScannerPage> {
             ),
             const SizedBox(height: 24),
             const Text(
-              'Scanning document...',
+              'Analyzing document...',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 20,
                 fontWeight: FontWeight.w600,
               ),
             ),
+            const SizedBox(height: 8),
+            Text(
+              widget.analysisStageText ?? 'Processing image',
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
             const SizedBox(height: 16),
             SizedBox(
-              width: 200,
+              width: 220,
               child: LinearProgressIndicator(
                 backgroundColor: Colors.white24,
-                valueColor: AlwaysStoppedAnimation<Color>(AppColors.green),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  AppColors.green,
+                ),
               ),
             ),
             const SizedBox(height: 24),
             const Text(
-              'Processing image...\nThis may take a few seconds',
+              'Please wait...',
               style: TextStyle(color: Colors.white70, fontSize: 14),
-              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -503,51 +595,54 @@ class _ScannerPageState extends State<ScannerPage> {
   Widget _buildThumbItem(int index) {
     final image = widget.capturedImages[index];
     return GestureDetector(
-      onTap: () => widget.onRemoveImage(index),
-      child: Container(
-        width: 44,
-        height: 58,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A28),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-        ),
-        child: Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.file(
-                image,
-                width: 44,
-                height: 58,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return const Center(
-                    child: Icon(Icons.image, color: Colors.white54, size: 20),
-                  );
-                },
-              ),
-            ),
-            Positioned(
-              bottom: 3,
-              right: 3,
-              child: Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(3),
+      onTap: _isBusy ? null : () => widget.onRemoveImage(index),
+      child: Opacity(
+        opacity: _isBusy ? 0.5 : 1,
+        child: Container(
+          width: 44,
+          height: 58,
+          decoration: BoxDecoration(
+            color: const Color(0xFF2A2A28),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Image.file(
+                  image,
+                  width: 44,
+                  height: 58,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Center(
+                      child: Icon(Icons.image, color: Colors.white54, size: 20),
+                    );
+                  },
                 ),
-                child: Text(
-                  '${index + 1}',
-                  style: const TextStyle(
-                    fontSize: 9,
-                    color: Colors.white,
-                    fontFamily: 'monospace',
+              ),
+              Positioned(
+                bottom: 3,
+                right: 3,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    '${index + 1}',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      color: Colors.white,
+                      fontFamily: 'monospace',
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -555,22 +650,25 @@ class _ScannerPageState extends State<ScannerPage> {
 
   Widget _buildThumbAddButton() {
     return GestureDetector(
-      onTap: widget.onAddFromGallery,
-      child: Container(
-        width: 44,
-        height: 58,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.2),
-            style: BorderStyle.solid,
+      onTap: _isBusy ? null : _onAddFromGallery,
+      child: Opacity(
+        opacity: _isBusy ? 0.5 : 1,
+        child: Container(
+          width: 44,
+          height: 58,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.2),
+              style: BorderStyle.solid,
+            ),
           ),
-        ),
-        child: Center(
-          child: Icon(
-            Icons.add,
-            size: 18,
-            color: Colors.white.withValues(alpha: 0.3),
+          child: Center(
+            child: Icon(
+              Icons.add,
+              size: 18,
+              color: Colors.white.withValues(alpha: 0.3),
+            ),
           ),
         ),
       ),

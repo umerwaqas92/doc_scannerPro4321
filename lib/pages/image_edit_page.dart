@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/scan_pipeline_models.dart';
 import '../pages/corner_adjust_page.dart';
@@ -32,6 +33,8 @@ class _ImageEditPageState extends State<ImageEditPage> {
   late List<File> _previewImages;
   late List<File?> _manualPerspectiveBases;
   late List<EditSessionState> _sessions;
+  Timer? _previewDebounce;
+  bool _pendingPreviewApply = false;
 
   @override
   void initState() {
@@ -52,6 +55,12 @@ class _ImageEditPageState extends State<ImageEditPage> {
         outputFile: output,
       );
     });
+  }
+
+  @override
+  void dispose() {
+    _previewDebounce?.cancel();
+    super.dispose();
   }
 
   EditSessionState get _currentSession => _sessions[_currentPage];
@@ -200,12 +209,32 @@ class _ImageEditPageState extends State<ImageEditPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildSlider('Brightness', session.brightness, 0.7, 1.4, (v) {
-              _updateCurrentSession(session.copyWith(brightness: v));
-            }),
-            _buildSlider('Contrast', session.contrast, 0.7, 2.0, (v) {
-              _updateCurrentSession(session.copyWith(contrast: v));
-            }),
+            _buildSlider(
+              'Brightness',
+              session.brightness,
+              0.2,
+              2.5,
+              (v) {
+                _updateCurrentSession(session.copyWith(brightness: v));
+                _schedulePreviewApply();
+              },
+              () {
+                _schedulePreviewApply();
+              },
+            ),
+            _buildSlider(
+              'Contrast',
+              session.contrast,
+              0.2,
+              2.0,
+              (v) {
+                _updateCurrentSession(session.copyWith(contrast: v));
+                _schedulePreviewApply();
+              },
+              () {
+                _schedulePreviewApply();
+              },
+            ),
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -233,6 +262,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
                   selected: session.filterMode == mode,
                   onSelected: (_) {
                     _updateCurrentSession(session.copyWith(filterMode: mode));
+                    _schedulePreviewApply();
                   },
                 );
               }).toList(),
@@ -250,11 +280,13 @@ class _ImageEditPageState extends State<ImageEditPage> {
                   _updateCurrentSession(
                     session.copyWith(rotation: session.rotation - 90),
                   );
+                  _schedulePreviewApply();
                 }),
                 _buildRotateBtn(Icons.rotate_right, 'Right', () {
                   _updateCurrentSession(
                     session.copyWith(rotation: session.rotation + 90),
                   );
+                  _schedulePreviewApply();
                 }),
                 _buildRotateBtn(Icons.restore, 'Reset', () {
                   _updateCurrentSession(
@@ -265,6 +297,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
                       filterMode: DocumentFilterMode.original,
                     ),
                   );
+                  _schedulePreviewApply();
                 }),
               ],
             ),
@@ -301,6 +334,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
     double min,
     double max,
     ValueChanged<double> onChanged,
+    VoidCallback onChangeEnd,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -315,6 +349,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
           max: max,
           activeColor: AppColors.text,
           onChanged: onChanged,
+          onChangeEnd: (_) => onChangeEnd(),
         ),
       ],
     );
@@ -343,26 +378,37 @@ class _ImageEditPageState extends State<ImageEditPage> {
   }
 
   void _updateCurrentSession(EditSessionState updated) {
-    final current = _sessions[_currentPage];
-    final filterChanged = updated.filterMode != current.filterMode;
-
     setState(() {
-      _sessions[_currentPage] = filterChanged
-          ? updated.copyWith(clearOutputFile: true)
-          : updated;
+      _sessions[_currentPage] = updated.copyWith(clearOutputFile: true);
       _dirtyPages.add(_currentPage);
     });
   }
 
-  Future<void> _applyCurrentPage() async {
-    if (_isProcessing) return;
+  void _schedulePreviewApply() {
+    _pendingPreviewApply = true;
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 220), () async {
+      if (!mounted) return;
+      await _applyCurrentPage();
+    });
+  }
 
+  Future<void> _applyCurrentPage() async {
+    if (_isProcessing) {
+      _pendingPreviewApply = true;
+      return;
+    }
+
+    _pendingPreviewApply = false;
     setState(() => _isProcessing = true);
     try {
       await _applyPage(_currentPage);
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
+        if (_pendingPreviewApply) {
+          _schedulePreviewApply();
+        }
       }
     }
   }
@@ -375,22 +421,15 @@ class _ImageEditPageState extends State<ImageEditPage> {
         ? widget.pipelineResults[index]
         : null;
     final manualBase = _manualPerspectiveBases[index];
-    final base =
-        manualBase ??
-        pipeline?.enhancedVariants[session.filterMode] ??
-        widget.images[index];
-    final filterForManual = switch (session.filterMode) {
-      DocumentFilterMode.blackWhite => 2,
-      DocumentFilterMode.grayscale => 3,
-      _ => 0,
-    };
+    final base = manualBase ?? pipeline?.croppedFile ?? widget.images[index];
+    final filterCode = _filterCodeForMode(session.filterMode);
 
     final adjusted = await _scannerService.applyAdjustments(
       base,
       brightness: session.brightness,
       contrast: session.contrast,
       rotation: session.rotation,
-      filter: manualBase != null ? filterForManual : 0,
+      filter: filterCode,
     );
 
     if (!mounted) return;
@@ -400,6 +439,25 @@ class _ImageEditPageState extends State<ImageEditPage> {
       _sessions[index] = session.copyWith(outputFile: adjusted ?? base);
       _dirtyPages.remove(index);
     });
+  }
+
+  int _filterCodeForMode(DocumentFilterMode mode) {
+    switch (mode) {
+      case DocumentFilterMode.original:
+        return 0;
+      case DocumentFilterMode.blackWhite:
+        return 2;
+      case DocumentFilterMode.grayscale:
+        return 3;
+      case DocumentFilterMode.colorEnhanced:
+        return 4;
+      case DocumentFilterMode.highContrastText:
+        return 5;
+      case DocumentFilterMode.warmPaper:
+        return 6;
+      case DocumentFilterMode.photoNatural:
+        return 7;
+    }
   }
 
   Future<void> _openCornerAdjust() async {
@@ -436,13 +494,10 @@ class _ImageEditPageState extends State<ImageEditPage> {
 
       setState(() {
         _manualPerspectiveBases[index] = warped;
-        _previewImages[index] = warped ?? source;
-        _sessions[index] = _sessions[index].copyWith(
-          outputFile: warped ?? source,
-          clearOutputFile: false,
-        );
-        _dirtyPages.remove(index);
+        _sessions[index] = _sessions[index].copyWith(clearOutputFile: true);
+        _dirtyPages.add(index);
       });
+      await _applyPage(index);
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
@@ -453,6 +508,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
   Future<void> _continueToResult() async {
     if (_isProcessing) return;
 
+    _previewDebounce?.cancel();
     setState(() => _isProcessing = true);
     try {
       final pagesToApply = _dirtyPages.toList(growable: false);

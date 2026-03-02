@@ -31,6 +31,8 @@ class AppState extends ChangeNotifier {
   bool _isProcessingOcr = false;
   bool _cameraInitialized = false;
   int _activeAnalysisCount = 0;
+  String? _analysisStageText;
+  DocumentFilterMode _captureFilterMode = DocumentFilterMode.colorEnhanced;
 
   // Settings
   bool _autoCrop = true;
@@ -48,6 +50,8 @@ class AppState extends ChangeNotifier {
   bool get isProcessingOcr => _isProcessingOcr;
   bool get cameraInitialized => _cameraInitialized;
   bool get isAnalyzing => _activeAnalysisCount > 0;
+  String? get analysisStageText => _analysisStageText;
+  DocumentFilterMode get captureFilterMode => _captureFilterMode;
   CameraService get cameraService => _cameraService;
 
   bool get autoCrop => _autoCrop;
@@ -93,22 +97,37 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     _activeAnalysisCount++;
+    _analysisStageText = 'Analyzing document...';
     notifyListeners();
 
     try {
-      final result = await _scanPipelineService.run(image);
+      final result = await _scanPipelineService.run(
+        image,
+        onStage: (stage, message) {
+          _analysisStageText = message;
+          notifyListeners();
+        },
+      );
       final index = _capturedImages.indexWhere((f) => f.path == originalPath);
       if (result != null &&
           index != -1 &&
           index < _capturedImages.length &&
           index < _pipelineResults.length) {
-        _pipelineResults[index] = result;
-        _capturedImages[index] = result.selectedOutputFile;
+        final selectedByCapture =
+            result.enhancedVariants[_captureFilterMode] ??
+            result.selectedOutputFile;
+        _pipelineResults[index] = result.copyWith(
+          selectedFilter: _captureFilterMode,
+        );
+        _capturedImages[index] = selectedByCapture;
       }
     } catch (e) {
       debugPrint('Pipeline analysis failed for image ${image.path}: $e');
     } finally {
       _activeAnalysisCount = (_activeAnalysisCount - 1).clamp(0, 9999).toInt();
+      if (_activeAnalysisCount == 0) {
+        _analysisStageText = null;
+      }
       notifyListeners();
     }
   }
@@ -147,6 +166,12 @@ class AppState extends ChangeNotifier {
     _pipelineResults.clear();
     _ocrResults.clear();
     _activeAnalysisCount = 0;
+    _analysisStageText = null;
+    notifyListeners();
+  }
+
+  void setCaptureFilterMode(DocumentFilterMode mode) {
+    _captureFilterMode = mode;
     notifyListeners();
   }
 
@@ -194,8 +219,25 @@ class AppState extends ChangeNotifier {
 
     _ocrResults.clear();
 
-    for (var image in _capturedImages) {
-      final result = await _ocrService.processImage(image);
+    for (var i = 0; i < _capturedImages.length; i++) {
+      final variants = <File>[];
+      final pipeline = i < _pipelineResults.length ? _pipelineResults[i] : null;
+
+      if (pipeline != null) {
+        variants.addAll(pipeline.enhancedVariants.values);
+      }
+
+      variants.add(_capturedImages[i]);
+
+      final seen = <String>{};
+      final deduped = <File>[];
+      for (final file in variants) {
+        if (seen.add(file.path)) {
+          deduped.add(file);
+        }
+      }
+
+      final result = await _ocrService.processImageWithVariants(deduped);
       _ocrResults.add(result);
     }
 

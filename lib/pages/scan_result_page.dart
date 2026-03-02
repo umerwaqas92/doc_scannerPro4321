@@ -65,7 +65,13 @@ class _ScanResultPageState extends State<ScanResultPage>
   @override
   void didUpdateWidget(ScanResultPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.scannedImages != widget.scannedImages) {
+    if (oldWidget.scannedImages != widget.scannedImages ||
+        oldWidget.ocrResults != widget.ocrResults) {
+      if (_currentPage >= widget.scannedImages.length) {
+        _currentPage = widget.scannedImages.isEmpty
+            ? 0
+            : widget.scannedImages.length - 1;
+      }
       _updateTextController();
     }
   }
@@ -469,6 +475,10 @@ class _ScanResultPageState extends State<ScanResultPage>
 
     final result = widget.ocrResults[_currentPage];
     final hasText = result.text.isNotEmpty;
+    final confidencePct = (result.confidence * 100)
+        .clamp(0, 100)
+        .toStringAsFixed(0);
+    final lowConfidence = result.confidence > 0 && result.confidence < 0.45;
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -492,11 +502,15 @@ class _ScanResultPageState extends State<ScanResultPage>
             Expanded(
               child: Text(
                 hasText
-                    ? 'Text extracted successfully'
+                    ? lowConfidence
+                          ? 'Text extracted with low confidence ($confidencePct%). Try another filter.'
+                          : 'Text extracted successfully ($confidencePct%)'
                     : 'No text detected. Try scanning again with better lighting.',
                 style: TextStyle(
                   fontSize: 13,
-                  color: hasText ? AppColors.green : Colors.orange,
+                  color: hasText
+                      ? (lowConfidence ? Colors.orange : AppColors.green)
+                      : Colors.orange,
                 ),
               ),
             ),

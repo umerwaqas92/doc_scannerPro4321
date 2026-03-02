@@ -74,27 +74,84 @@ class DocumentScannerService {
       var image = img.decodeImage(bytes);
       if (image == null) return null;
 
-      if (rotation != 0) {
-        if (rotation == 90 || rotation == -270) {
-          image = img.copyRotate(image, angle: 90);
-        } else if (rotation == 180 || rotation == -180) {
-          image = img.copyRotate(image, angle: 180);
-        } else if (rotation == 270 || rotation == -90) {
-          image = img.copyRotate(image, angle: 270);
-        }
+      final normalizedTurns = (((rotation / 90).round() % 4) + 4) % 4;
+      if (normalizedTurns == 1) {
+        image = img.copyRotate(image, angle: 90);
+      } else if (normalizedTurns == 2) {
+        image = img.copyRotate(image, angle: 180);
+      } else if (normalizedTurns == 3) {
+        image = img.copyRotate(image, angle: 270);
       }
 
+      final safeBrightness = brightness.clamp(0.15, 2.5);
+      final safeContrast = contrast.clamp(0.1, 2.0);
       image = img.adjustColor(
         image,
-        brightness: brightness,
-        contrast: contrast,
+        brightness: safeBrightness,
+        contrast: safeContrast,
       );
 
       if (filter == 2) {
+        // B&W Strong
         image = img.grayscale(image);
-        image = img.adjustColor(image, contrast: 1.3);
+        image = img.adjustColor(image, contrast: 1.8, brightness: 1.12);
+        image = img.luminanceThreshold(image, threshold: 0.58);
       } else if (filter == 3) {
+        // Grayscale
         image = img.grayscale(image);
+      } else if (filter == 4) {
+        // Color Enhanced
+        image = img.adjustColor(
+          image,
+          contrast: 1.2,
+          brightness: 1.08,
+          saturation: 1.1,
+          gamma: 0.95,
+        );
+      } else if (filter == 5) {
+        // Text+
+        image = img.grayscale(image);
+        image = img.gaussianBlur(image, radius: 1);
+        image = img.adjustColor(image, contrast: 2.0, brightness: 1.12);
+        image = img.luminanceThreshold(image, threshold: 0.52);
+      } else if (filter == 6) {
+        // Warm paper look
+        image = img.sepia(image, amount: 0.2);
+        image = img.adjustColor(
+          image,
+          contrast: 1.12,
+          brightness: 1.06,
+          saturation: 0.96,
+        );
+      } else if (filter == 7) {
+        // Natural photo
+        image = img.adjustColor(
+          image,
+          contrast: 1.05,
+          saturation: 1.03,
+          brightness: 1.02,
+          gamma: 0.98,
+        );
+      } else if (filter == 8) {
+        // Auto
+        final gray = img.grayscale(image);
+        double sum = 0;
+        for (final p in gray) {
+          sum += p.rNormalized;
+        }
+        final mean = sum / (gray.width * gray.height);
+        final autoBrightness = mean < 0.42
+            ? 1.16
+            : mean > 0.72
+            ? 0.92
+            : 1.04;
+        final autoContrast = mean < 0.42 ? 1.22 : 1.12;
+        image = img.adjustColor(
+          image,
+          contrast: autoContrast,
+          brightness: autoBrightness,
+          saturation: 1.04,
+        );
       }
 
       final outputPath = _getAdjustedPath(imageFile.path);

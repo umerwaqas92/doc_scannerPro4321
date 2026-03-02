@@ -101,6 +101,14 @@ class _MainScreenState extends State<MainScreen> {
 
   void _onScannerDone() async {
     final appState = context.read<AppState>();
+    if (appState.isAnalyzing) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please wait for analysis to complete')),
+        );
+      }
+      return;
+    }
     await appState.disposeCamera();
 
     if (appState.capturedImages.isNotEmpty) {
@@ -173,6 +181,46 @@ class _MainScreenState extends State<MainScreen> {
     appState.removeCapturedImage(index);
   }
 
+  int _filterIndexFromMode(DocumentFilterMode mode) {
+    switch (mode) {
+      case DocumentFilterMode.original:
+        return 2;
+      case DocumentFilterMode.blackWhite:
+        return 1;
+      case DocumentFilterMode.colorEnhanced:
+        return 0;
+      case DocumentFilterMode.grayscale:
+        return 3;
+      case DocumentFilterMode.highContrastText:
+        return 4;
+      case DocumentFilterMode.warmPaper:
+        return 5;
+      case DocumentFilterMode.photoNatural:
+        return 6;
+    }
+  }
+
+  DocumentFilterMode _modeFromFilterIndex(int index) {
+    switch (index) {
+      case 0:
+        return DocumentFilterMode.colorEnhanced;
+      case 1:
+        return DocumentFilterMode.blackWhite;
+      case 2:
+        return DocumentFilterMode.original;
+      case 3:
+        return DocumentFilterMode.grayscale;
+      case 4:
+        return DocumentFilterMode.highContrastText;
+      case 5:
+        return DocumentFilterMode.warmPaper;
+      case 6:
+        return DocumentFilterMode.photoNatural;
+      default:
+        return DocumentFilterMode.colorEnhanced;
+    }
+  }
+
   void _onEditContinue(List<EditSessionState> sessions) {
     final appState = context.read<AppState>();
     appState.applyEditSessions(sessions);
@@ -181,6 +229,9 @@ class _MainScreenState extends State<MainScreen> {
       _showEdit = false;
       _showResult = true;
     });
+
+    // Kick off OCR immediately so Result tab is ready without manual retry.
+    appState.processOcrForAllImages();
   }
 
   void _onEditBack() async {
@@ -243,6 +294,12 @@ class _MainScreenState extends State<MainScreen> {
       return ScannerPage(
         cameraController: appState.cameraService.controller,
         isCameraInitialized: appState.cameraInitialized,
+        isAnalyzing: appState.isAnalyzing,
+        analysisStageText: appState.analysisStageText,
+        selectedFilterIndex: _filterIndexFromMode(appState.captureFilterMode),
+        onFilterChanged: (index) {
+          appState.setCaptureFilterMode(_modeFromFilterIndex(index));
+        },
         capturedImages: appState.capturedImages,
         onRemoveImage: (index) => appState.removeCapturedImage(index),
         onCancel: _onScannerCancel,
