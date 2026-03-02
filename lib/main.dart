@@ -7,6 +7,7 @@ import 'pages/splash_screen.dart';
 import 'pages/home_page.dart';
 import 'pages/scanner_page.dart';
 import 'pages/scan_result_page.dart';
+import 'pages/image_edit_page.dart';
 import 'pages/doc_view_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
@@ -235,6 +236,21 @@ class _MainScreenState extends State<MainScreen> {
         onAddMore: _onResultAddMore,
         onProcessOcr: () => appState.processOcrForAllImages(),
         onTextChanged: (text) {},
+        onEdit: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ImageEditPage(
+                images: appState.capturedImages,
+                onSave: (editedImages) {
+                  appState.capturedImages.clear();
+                  appState.capturedImages.addAll(editedImages);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+          );
+        },
       );
     }
 

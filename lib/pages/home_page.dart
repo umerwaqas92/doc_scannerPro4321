@@ -101,7 +101,7 @@ class HomePage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Scan Document',
+                    'Doc Scanner',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
@@ -110,7 +110,7 @@ class HomePage extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Tap to open camera scanner',
+                    'Tap to scan documents',
                     style: TextStyle(
                       fontSize: 13,
                       color: Colors.white.withOpacity(0.6),

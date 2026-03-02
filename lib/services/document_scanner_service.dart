@@ -62,6 +62,84 @@ class DocumentScannerService {
     return '${originalPath.substring(0, lastDot)}_scanned${originalPath.substring(lastDot)}';
   }
 
+  Future<File?> applyAdjustments(
+    File imageFile, {
+    double brightness = 1.0,
+    double contrast = 1.0,
+    double rotation = 0.0,
+    int filter = 0,
+  }) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      if (rotation != 0) {
+        if (rotation == 90 || rotation == -270) {
+          image = img.copyRotate(image, angle: 90);
+        } else if (rotation == 180 || rotation == -180) {
+          image = img.copyRotate(image, angle: 180);
+        } else if (rotation == 270 || rotation == -90) {
+          image = img.copyRotate(image, angle: 270);
+        }
+      }
+
+      image = img.adjustColor(
+        image,
+        brightness: brightness,
+        contrast: contrast,
+      );
+
+      if (filter == 2) {
+        image = img.grayscale(image);
+        image = img.adjustColor(image, contrast: 1.3);
+      } else if (filter == 3) {
+        image = img.grayscale(image);
+      }
+
+      final outputPath = _getAdjustedPath(imageFile.path);
+      final outputFile = File(outputPath);
+      await outputFile.writeAsBytes(img.encodeJpg(image, quality: 95));
+
+      return outputFile;
+    } catch (e) {
+      debugPrint('Error applying adjustments: $e');
+      return null;
+    }
+  }
+
+  String _getAdjustedPath(String originalPath) {
+    final lastDot = originalPath.lastIndexOf('.');
+    if (lastDot == -1) {
+      return '${originalPath}_adjusted.jpg';
+    }
+    return '${originalPath.substring(0, lastDot)}_adjusted${originalPath.substring(lastDot)}';
+  }
+
+  static img.Image _preprocessResize(img.Image image, int maxHeight) {
+    if (image.height > maxHeight) {
+      return img.copyResize(
+        image,
+        height: maxHeight,
+        interpolation: img.Interpolation.linear,
+      );
+    }
+    return image;
+  }
+
+  static img.Image _preprocessGrayscale(img.Image image) {
+    return img.grayscale(image);
+  }
+
+  static img.Image _preprocessBlur(img.Image image) {
+    return img.gaussianBlur(image, radius: 1);
+  }
+
+  static img.Image _preprocessNormalize(img.Image image) {
+    // Normalize brightness to improve contrast
+    return img.adjustColor(image, brightness: 1.1, contrast: 1.15);
+  }
+
   /// Top-level or static method for compute()
   static Uint8List? _processImageInBackground(Map<String, dynamic> params) {
     final Uint8List bytes = params['bytes'];
@@ -70,20 +148,33 @@ class DocumentScannerService {
     var image = img.decodeImage(bytes);
     if (image == null) return null;
 
-    // Optimize: Resize very large images before processing to speed up logic
-    // A standard 2000px height is plenty for a high-quality document scan
-    if (image.height > 2000) {
-      image = img.copyResize(
-        image,
-        height: 2000,
-        interpolation: img.Interpolation.linear,
-      );
-    }
+    debugPrint('Starting pre-processing pipeline...');
+
+    // === STEP 1: PRE-PROCESSING ===
+    // 1a. Resize to optimal resolution for faster processing
+    image = _preprocessResize(image, 2000);
+    debugPrint('Pre-processing: Resize done');
+
+    // 1b. Convert to grayscale (for easier edge detection)
+    image = _preprocessGrayscale(image);
+    debugPrint('Pre-processing: Grayscale done');
+
+    // 1c. Apply slight blur (reduce noise)
+    image = _preprocessBlur(image);
+    debugPrint('Pre-processing: Blur done');
+
+    // 1d. Normalize brightness
+    image = _preprocessNormalize(image);
+    debugPrint('Pre-processing: Normalize done');
 
     final service = DocumentScannerService();
 
-    // 1. Detect edges and correct perspective
+    // === STEP 2: DOCUMENT DETECTION & PERSPECTIVE ===
+    // Detect edges and correct perspective
     if (autoEnhance) {
+      // Convert back to color for enhancement
+      image = img.adjustColor(image, saturation: 1.0);
+
       final edges = service._detectEdgesSync(image);
       if (edges != null) {
         image = service._applyPerspectiveCorrection(image, edges);

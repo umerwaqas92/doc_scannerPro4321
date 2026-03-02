@@ -35,6 +35,35 @@ class _ScannerPageState extends State<ScannerPage> {
   final List<String> _filters = ['Auto', 'B&W', 'Color', 'Grayscale', 'Photo'];
 
   bool _isScanning = false;
+  bool _isStable = false;
+  int _stableFrames = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _startStabilityCheck();
+  }
+
+  void _startStabilityCheck() {
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted && !_isScanning) {
+        setState(() {
+          _isStable = true;
+        });
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(ScannerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.capturedImages.length > oldWidget.capturedImages.length) {
+      setState(() {
+        _isStable = false;
+      });
+      _startStabilityCheck();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -163,7 +192,9 @@ class _ScannerPageState extends State<ScannerPage> {
             height: 290,
             decoration: BoxDecoration(
               border: Border.all(
-                color: Colors.white.withValues(alpha: 0.7),
+                color: _isStable
+                    ? Colors.green
+                    : Colors.white.withValues(alpha: 0.7),
                 width: 2,
               ),
               borderRadius: BorderRadius.circular(8),
@@ -190,14 +221,35 @@ class _ScannerPageState extends State<ScannerPage> {
             ),
           ),
         ),
-        const Positioned(
+        Positioned(
           bottom: 14,
           left: 0,
           right: 0,
-          child: Text(
-            'Align document within frame',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.white54),
+          child: Column(
+            children: [
+              Text(
+                _isStable
+                    ? 'Hold steady - Ready to capture'
+                    : 'Align document within frame',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _isStable ? Colors.green : Colors.white54,
+                  fontWeight: _isStable ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+              if (!_isStable) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Wait for green frame',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ],
@@ -355,8 +407,19 @@ class _ScannerPageState extends State<ScannerPage> {
   void _onCapture() {
     if (_isScanning) return;
 
+    if (!_isStable) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please hold steady and wait for green frame'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isScanning = true;
+      _isStable = false;
     });
 
     widget.onCapture();

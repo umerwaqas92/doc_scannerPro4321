@@ -8,10 +8,12 @@ class CameraService {
   List<CameraDescription>? _cameras;
   bool _isInitialized = false;
   String? _errorMessage;
+  bool _isCapturing = false;
 
   bool get isInitialized => _isInitialized;
   CameraController? get controller => _controller;
   String? get errorMessage => _errorMessage;
+  bool get isCapturing => _isCapturing;
 
   Future<bool> requestPermissions() async {
     try {
@@ -69,12 +71,15 @@ class CameraService {
 
       _controller = CameraController(
         selectedCamera,
-        ResolutionPreset.high,
+        ResolutionPreset.veryHigh,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
 
       await _controller!.initialize();
+
+      await _applyDocumentSettings();
+
       _isInitialized = true;
       debugPrint('Camera initialized successfully');
       return true;
@@ -86,19 +91,40 @@ class CameraService {
     }
   }
 
+  Future<void> _applyDocumentSettings() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+
+    try {
+      await _controller!.setFlashMode(FlashMode.auto);
+      debugPrint('Applied document settings: Flash auto');
+    } catch (e) {
+      debugPrint('Could not apply camera settings: $e');
+    }
+  }
+
   Future<File?> captureImage() async {
-    if (_controller == null || !_controller!.value.isInitialized) {
-      debugPrint('Camera not initialized, cannot capture');
+    if (_controller == null ||
+        !_controller!.value.isInitialized ||
+        _isCapturing) {
+      debugPrint('Camera not initialized or capturing, cannot capture');
       return null;
     }
 
+    _isCapturing = true;
+
     try {
+      await _controller!.setFlashMode(FlashMode.auto);
+
+      await Future.delayed(const Duration(milliseconds: 100));
+
       final XFile image = await _controller!.takePicture();
       debugPrint('Image captured: ${image.path}');
       return File(image.path);
     } catch (e) {
       debugPrint('Error capturing image: $e');
       return null;
+    } finally {
+      _isCapturing = false;
     }
   }
 
