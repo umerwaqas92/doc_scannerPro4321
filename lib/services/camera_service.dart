@@ -73,7 +73,9 @@ class CameraService {
         selectedCamera,
         ResolutionPreset.veryHigh,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: Platform.isIOS
+            ? ImageFormatGroup.bgra8888
+            : ImageFormatGroup.yuv420,
       );
 
       await _controller!.initialize();
@@ -96,6 +98,8 @@ class CameraService {
 
     try {
       await _controller!.setFlashMode(FlashMode.auto);
+      await _controller!.setFocusMode(FocusMode.auto);
+      await _controller!.setExposureMode(ExposureMode.auto);
       debugPrint('Applied document settings: Flash auto');
     } catch (e) {
       debugPrint('Could not apply camera settings: $e');
@@ -130,13 +134,14 @@ class CameraService {
 
   Future<void> dispose() async {
     _isInitialized = false;
-    if (_controller != null) {
+    final controller = _controller;
+    _controller = null;
+    if (controller != null) {
       try {
-        await _controller!.dispose();
+        await controller.dispose();
       } catch (e) {
         debugPrint('Error disposing camera: $e');
       }
-      _controller = null;
     }
   }
 

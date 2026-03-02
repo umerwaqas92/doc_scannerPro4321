@@ -340,8 +340,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> disposeCamera() async {
-    await _cameraService.dispose();
     _cameraInitialized = false;
+    notifyListeners();
+    await _cameraService.dispose();
     notifyListeners();
   }
 

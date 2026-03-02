@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
@@ -13,10 +14,7 @@ class ScannerPage extends StatefulWidget {
   final bool isCameraInitialized;
   final bool isAnalyzing;
   final String? analysisStageText;
-  final int selectedFilterIndex;
-  final ValueChanged<int> onFilterChanged;
   final List<File> capturedImages;
-  final Function(int) onRemoveImage;
 
   const ScannerPage({
     super.key,
@@ -28,79 +26,316 @@ class ScannerPage extends StatefulWidget {
     required this.isCameraInitialized,
     required this.isAnalyzing,
     required this.analysisStageText,
-    required this.selectedFilterIndex,
-    required this.onFilterChanged,
     required this.capturedImages,
-    required this.onRemoveImage,
   });
 
   @override
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScannerPageState extends State<ScannerPage> {
-  int _selectedFilter = 0;
-  final List<String> _filters = [
-    'Auto',
-    'B&W',
-    'Color',
-    'Grayscale',
-    'Text+',
-    'Warm',
-    'Photo',
-  ];
+class _ScannerPageState extends State<ScannerPage>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _analyzerController;
 
   bool _isStable = false;
   bool _isCaptureActionPending = false;
+  bool _isStreamRunning = false;
+  bool _isStartingStream = false;
+  bool _isFrameProcessing = false;
+  bool _liveAnalyzerAvailable = true;
+  bool _autoCaptureEnabled = true;
+  bool _autoCapturedSinceUnstable = false;
+
+  int _frameTick = 0;
+  int _stableFrameCount = 0;
+
+  double _detectionConfidence = 0.0;
+  String _liveStatus = 'Searching for document...';
+  DateTime _lastAutoCaptureAt = DateTime.fromMillisecondsSinceEpoch(0);
+  CameraController? _streamController;
 
   bool get _isBusy => _isCaptureActionPending || widget.isAnalyzing;
 
   @override
   void initState() {
     super.initState();
-    _selectedFilter = widget.selectedFilterIndex.clamp(0, _filters.length - 1);
-    _startStabilityCheck();
+    _analyzerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_startLiveAnalyzerIfPossible());
+    });
   }
 
   @override
   void didUpdateWidget(covariant ScannerPage oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (widget.selectedFilterIndex != oldWidget.selectedFilterIndex) {
-      _selectedFilter = widget.selectedFilterIndex.clamp(
-        0,
-        _filters.length - 1,
-      );
+    if (widget.cameraController != oldWidget.cameraController ||
+        (widget.isCameraInitialized && !oldWidget.isCameraInitialized)) {
+      _resetLiveState();
+      unawaited(_restartLiveAnalyzer());
+    }
+
+    if (!oldWidget.isAnalyzing && widget.isAnalyzing) {
+      unawaited(_stopLiveAnalyzer());
+    }
+    if (oldWidget.isAnalyzing && !widget.isAnalyzing) {
+      unawaited(_startLiveAnalyzerIfPossible());
     }
 
     if (widget.capturedImages.length > oldWidget.capturedImages.length) {
-      setState(() {
-        _isStable = false;
-      });
-      _startStabilityCheck();
+      _stableFrameCount = 0;
+      _autoCapturedSinceUnstable = false;
+      _isStable = false;
+      _liveStatus = 'Searching for document...';
+      _detectionConfidence = 0;
+      if (mounted) {
+        setState(() {});
+      }
     }
   }
 
-  void _startStabilityCheck() {
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted && !_isBusy) {
-        setState(() {
-          _isStable = true;
-        });
+  @override
+  void dispose() {
+    unawaited(_stopLiveAnalyzer());
+    _analyzerController.dispose();
+    super.dispose();
+  }
+
+  void _resetLiveState() {
+    _isStable = false;
+    _stableFrameCount = 0;
+    _frameTick = 0;
+    _detectionConfidence = 0;
+    _liveStatus = 'Searching for document...';
+    _autoCapturedSinceUnstable = false;
+  }
+
+  Future<void> _restartLiveAnalyzer() async {
+    await _stopLiveAnalyzer();
+    await _startLiveAnalyzerIfPossible();
+  }
+
+  Future<void> _startLiveAnalyzerIfPossible() async {
+    if (!mounted || _isBusy || _isStartingStream || _isStreamRunning) return;
+
+    final controller = _activeController();
+    if (controller == null) return;
+
+    if (controller.value.isTakingPicture) return;
+
+    _isStartingStream = true;
+    try {
+      if (controller.value.isStreamingImages) {
+        _isStreamRunning = true;
+      } else {
+        await controller.startImageStream(_onCameraFrame);
+        _isStreamRunning = true;
       }
-    });
+      _streamController = controller;
+      _liveAnalyzerAvailable = true;
+    } catch (_) {
+      _liveAnalyzerAvailable = false;
+      _isStreamRunning = false;
+      _isStable = true;
+      _liveStatus = 'Live analyzer unavailable. Tap capture.';
+      _detectionConfidence = 0.0;
+      if (mounted) {
+        setState(() {});
+      }
+    } finally {
+      _isStartingStream = false;
+    }
+  }
+
+  Future<void> _stopLiveAnalyzer() async {
+    final controller = _streamController ?? widget.cameraController;
+    if (controller == null || !_isStreamRunning) return;
+    try {
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
+      }
+    } catch (_) {
+      // ignore stream stop failures when camera lifecycle is changing.
+    } finally {
+      _isStreamRunning = false;
+      _isFrameProcessing = false;
+      _streamController = null;
+    }
+  }
+
+  CameraController? _activeController() {
+    final controller = widget.cameraController;
+    if (controller == null || !widget.isCameraInitialized) return null;
+    try {
+      final value = controller.value;
+      if (!value.isInitialized || value.hasError) return null;
+      return controller;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _onCameraFrame(CameraImage image) {
+    if (!mounted || _isBusy || !_liveAnalyzerAvailable || _isFrameProcessing) {
+      return;
+    }
+
+    _frameTick++;
+    if (_frameTick % 2 != 0) return;
+
+    _isFrameProcessing = true;
+    try {
+      final stats = _analyzeFrame(image);
+      final confidence = stats.confidence.clamp(0.0, 1.0);
+      final candidate = stats.candidate;
+
+      final previousStable = _isStable;
+      if (candidate && confidence > 0.42) {
+        _stableFrameCount = math.min(_stableFrameCount + 1, 36);
+      } else {
+        _stableFrameCount = math.max(_stableFrameCount - 2, 0);
+      }
+
+      final stableNow = _stableFrameCount >= 8;
+      if (!stableNow) {
+        _autoCapturedSinceUnstable = false;
+      }
+
+      String status;
+      if (stableNow) {
+        status = 'Document locked';
+      } else if (candidate) {
+        status = 'Hold steady...';
+      } else {
+        status = 'Searching for document...';
+      }
+
+      final shouldRebuild = stableNow != previousStable || _frameTick % 6 == 0;
+      if (shouldRebuild && mounted) {
+        setState(() {
+          _isStable = stableNow;
+          _detectionConfidence = confidence;
+          _liveStatus = status;
+        });
+      } else {
+        _isStable = stableNow;
+        _detectionConfidence = confidence;
+        _liveStatus = status;
+      }
+
+      if (_autoCaptureEnabled &&
+          stableNow &&
+          !_autoCapturedSinceUnstable &&
+          !_isBusy) {
+        final now = DateTime.now();
+        final elapsed = now.difference(_lastAutoCaptureAt).inMilliseconds;
+        if (elapsed > 2400) {
+          _autoCapturedSinceUnstable = true;
+          _lastAutoCaptureAt = now;
+          unawaited(_onCapture(autoTriggered: true));
+        }
+      }
+    } catch (_) {
+      // keep scanner responsive even if one frame fails.
+    } finally {
+      _isFrameProcessing = false;
+    }
+  }
+
+  _FrameStats _analyzeFrame(CameraImage image) {
+    if (image.planes.isEmpty || image.width < 8 || image.height < 8) {
+      return const _FrameStats(confidence: 0, candidate: false);
+    }
+
+    final plane = image.planes.first;
+    final bytes = plane.bytes;
+    final rowStride = plane.bytesPerRow;
+    final pixelStride = plane.bytesPerPixel ?? 1;
+
+    if (bytes.isEmpty || rowStride <= 0 || pixelStride <= 0) {
+      return const _FrameStats(confidence: 0, candidate: false);
+    }
+
+    final width = image.width;
+    final height = image.height;
+
+    final x0 = (width * 0.16).round();
+    final x1 = (width * 0.84).round();
+    final y0 = (height * 0.18).round();
+    final y1 = (height * 0.84).round();
+
+    final step = (width ~/ 96).clamp(2, 10);
+
+    double edgeSum = 0;
+    double lumaSum = 0;
+    double lumaSqSum = 0;
+    int samples = 0;
+
+    for (int y = y0; y < y1 - step; y += step) {
+      final row = y * rowStride;
+      final rowDown = (y + step) * rowStride;
+
+      for (int x = x0; x < x1 - step; x += step) {
+        final i = row + x * pixelStride;
+        final iRight = row + (x + step) * pixelStride;
+        final iDown = rowDown + x * pixelStride;
+
+        if (i >= bytes.length ||
+            iRight >= bytes.length ||
+            iDown >= bytes.length) {
+          continue;
+        }
+
+        final v = bytes[i].toDouble();
+        final vr = bytes[iRight].toDouble();
+        final vd = bytes[iDown].toDouble();
+
+        edgeSum += (v - vr).abs() + (v - vd).abs();
+        lumaSum += v;
+        lumaSqSum += v * v;
+        samples++;
+      }
+    }
+
+    if (samples == 0) {
+      return const _FrameStats(confidence: 0, candidate: false);
+    }
+
+    final mean = lumaSum / samples;
+    final variance = (lumaSqSum / samples) - (mean * mean);
+
+    final brightnessNorm = (mean / 255.0).clamp(0.0, 1.0);
+    final varianceNorm = (variance / (255.0 * 255.0)).clamp(0.0, 1.0);
+    final edgeNorm = (edgeSum / (samples * 255.0 * 2.0)).clamp(0.0, 1.0);
+
+    final brightnessScore = (1.0 - ((brightnessNorm - 0.62).abs() / 0.62))
+        .clamp(0.0, 1.0);
+    final confidence =
+        (edgeNorm * 0.55 + varianceNorm * 0.30 + brightnessScore * 0.15).clamp(
+          0.0,
+          1.0,
+        );
+
+    final candidate =
+        edgeNorm > 0.075 &&
+        varianceNorm > 0.0055 &&
+        brightnessNorm > 0.16 &&
+        brightnessNorm < 0.97;
+
+    return _FrameStats(confidence: confidence, candidate: candidate);
   }
 
   double _previewAspectRatio() {
-    if (widget.cameraController == null ||
-        !widget.isCameraInitialized ||
-        !widget.cameraController!.value.isInitialized) {
+    final controller = _activeController();
+    if (controller == null) {
       return 3 / 4;
     }
 
-    final controllerAspect = widget.cameraController!.value.aspectRatio;
-    final portraitAspect = (1 / controllerAspect).clamp(0.6, 1.6);
-    return portraitAspect;
+    final controllerAspect = controller.value.aspectRatio;
+    return (1 / controllerAspect).clamp(0.65, 1.6);
   }
 
   @override
@@ -113,16 +348,34 @@ class _ScannerPageState extends State<ScannerPage> {
             children: [
               _buildHeader(),
               Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    children: [
-                      _buildCameraPreview(),
-                      _buildFilterStrip(),
-                      _buildCaptureControls(),
-                      _buildThumbStrip(),
-                      const SizedBox(height: 16),
-                    ],
-                  ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final reservedControlsHeight =
+                        widget.capturedImages.isNotEmpty ? 130.0 : 116.0;
+                    final previewHeight =
+                        (constraints.maxHeight - reservedControlsHeight).clamp(
+                          170.0,
+                          constraints.maxHeight,
+                        );
+
+                    return Column(
+                      children: [
+                        SizedBox(
+                          height: previewHeight,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                            child: _buildCameraPreview(),
+                          ),
+                        ),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: _buildCaptureControls(),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ],
@@ -142,7 +395,7 @@ class _ScannerPageState extends State<ScannerPage> {
           _buildHeaderButton('✕ Cancel', widget.onCancel, !_isBusy),
           Text(
             widget.capturedImages.isEmpty
-                ? 'Scan Document'
+                ? 'Document Scanner'
                 : '${widget.capturedImages.length} scanned',
             style: const TextStyle(
               fontSize: 16,
@@ -181,29 +434,40 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   Widget _buildCameraPreview() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: AspectRatio(
-          aspectRatio: _previewAspectRatio(),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              widget.isCameraInitialized &&
-                      widget.cameraController != null &&
-                      widget.cameraController!.value.isInitialized
-                  ? CameraPreview(widget.cameraController!)
-                  : _buildCameraPlaceholder(),
-              _buildViewfinderOverlay(),
-            ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final ratio = _previewAspectRatio();
+        final activeController = _activeController();
+        var width = constraints.maxWidth;
+        var height = width / ratio;
+        if (height > constraints.maxHeight) {
+          height = constraints.maxHeight;
+          width = height * ratio;
+        }
+
+        return Center(
+          child: Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  activeController != null
+                      ? CameraPreview(activeController)
+                      : _buildCameraPlaceholder(),
+                  _buildViewfinderOverlay(),
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -227,46 +491,126 @@ class _ScannerPageState extends State<ScannerPage> {
   }
 
   Widget _buildViewfinderOverlay() {
+    final confidencePct = (_detectionConfidence * 100)
+        .clamp(0, 100)
+        .toStringAsFixed(0);
+
     return Stack(
       children: [
+        Positioned(
+          top: 16,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.45),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+              ),
+              child: Text(
+                _isStable ? 'Document detected • $confidencePct%' : _liveStatus,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: _isStable ? AppColors.green : Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ),
         Center(
           child: FractionallySizedBox(
-            widthFactor: 0.72,
-            heightFactor: 0.72,
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(
-                  color: _isStable
-                      ? Colors.green
-                      : Colors.white.withValues(alpha: 0.7),
-                  width: 2,
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Stack(
-                children: [
-                  Positioned(
-                    top: -2,
-                    left: -2,
-                    child: _buildCorner(true, true),
+            widthFactor: 0.90,
+            heightFactor: 0.86,
+            child: AnimatedBuilder(
+              animation: _analyzerController,
+              builder: (context, child) {
+                final frameColor = _isStable
+                    ? AppColors.green
+                    : Colors.white.withValues(alpha: 0.72);
+                final pulse = 0.35 + (_analyzerController.value * 0.65);
+
+                return Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.30),
+                      width: 1.4,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  Positioned(
-                    top: -2,
-                    right: -2,
-                    child: _buildCorner(true, false),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: frameColor, width: 2),
+                        borderRadius: BorderRadius.circular(10),
+                        boxShadow: [
+                          BoxShadow(
+                            color: frameColor.withValues(alpha: pulse * 0.35),
+                            blurRadius: 10,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final maxY = constraints.maxHeight - 24;
+                          final lineY = 12 + (maxY * _analyzerController.value);
+                          return Stack(
+                            children: [
+                              Positioned(
+                                top: -2,
+                                left: -2,
+                                child: _buildCorner(true, true, frameColor),
+                              ),
+                              Positioned(
+                                top: -2,
+                                right: -2,
+                                child: _buildCorner(true, false, frameColor),
+                              ),
+                              Positioned(
+                                bottom: -2,
+                                left: -2,
+                                child: _buildCorner(false, true, frameColor),
+                              ),
+                              Positioned(
+                                bottom: -2,
+                                right: -2,
+                                child: _buildCorner(false, false, frameColor),
+                              ),
+                              Positioned(
+                                left: 10,
+                                right: 10,
+                                top: lineY,
+                                child: Container(
+                                  height: 2,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.green.withValues(
+                                      alpha: 0.9,
+                                    ),
+                                    borderRadius: BorderRadius.circular(2),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: AppColors.green.withValues(
+                                          alpha: 0.6,
+                                        ),
+                                        blurRadius: 8,
+                                        spreadRadius: 1,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
                   ),
-                  Positioned(
-                    bottom: -2,
-                    left: -2,
-                    child: _buildCorner(false, true),
-                  ),
-                  Positioned(
-                    bottom: -2,
-                    right: -2,
-                    child: _buildCorner(false, false),
-                  ),
-                ],
-              ),
+                );
+              },
             ),
           ),
         ),
@@ -274,55 +618,34 @@ class _ScannerPageState extends State<ScannerPage> {
           bottom: 14,
           left: 0,
           right: 0,
-          child: Column(
-            children: [
-              Text(
-                _isStable
-                    ? 'Hold steady - Ready to capture'
-                    : 'Align document within frame',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _isStable ? Colors.green : Colors.white54,
-                  fontWeight: _isStable ? FontWeight.bold : FontWeight.normal,
-                ),
-              ),
-              if (!_isStable) ...[
-                const SizedBox(height: 4),
-                Text(
-                  'Wait for green frame',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: Colors.white.withValues(alpha: 0.4),
-                  ),
-                ),
-              ],
-            ],
+          child: Text(
+            _isStable
+                ? (_autoCaptureEnabled
+                      ? 'Hold steady • auto-capture enabled'
+                      : 'Hold steady and tap capture')
+                : 'Align page inside frame',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              color: _isStable ? AppColors.green : Colors.white54,
+              fontWeight: _isStable ? FontWeight.w600 : FontWeight.normal,
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildCorner(bool isTop, bool isLeft) {
+  Widget _buildCorner(bool isTop, bool isLeft, Color color) {
     return Container(
       width: 20,
       height: 20,
       decoration: BoxDecoration(
         border: Border(
-          top: isTop
-              ? const BorderSide(color: Colors.white, width: 3)
-              : BorderSide.none,
-          bottom: !isTop
-              ? const BorderSide(color: Colors.white, width: 3)
-              : BorderSide.none,
-          left: isLeft
-              ? const BorderSide(color: Colors.white, width: 3)
-              : BorderSide.none,
-          right: !isLeft
-              ? const BorderSide(color: Colors.white, width: 3)
-              : BorderSide.none,
+          top: isTop ? BorderSide(color: color, width: 3) : BorderSide.none,
+          bottom: !isTop ? BorderSide(color: color, width: 3) : BorderSide.none,
+          left: isLeft ? BorderSide(color: color, width: 3) : BorderSide.none,
+          right: !isLeft ? BorderSide(color: color, width: 3) : BorderSide.none,
         ),
         borderRadius: BorderRadius.only(
           topLeft: isTop && isLeft ? const Radius.circular(4) : Radius.zero,
@@ -336,68 +659,40 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Widget _buildFilterStrip() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Row(
-        children: List.generate(_filters.length, (index) {
-          final isSelected = _selectedFilter == index;
-          return GestureDetector(
-            onTap: _isBusy
-                ? null
-                : () {
-                    setState(() => _selectedFilter = index);
-                    widget.onFilterChanged(index);
-                  },
-            child: Opacity(
-              opacity: _isBusy ? 0.5 : 1,
-              child: Container(
-                margin: const EdgeInsets.only(right: 10),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected ? Colors.white : Colors.transparent,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Colors.white.withValues(
-                      alpha: isSelected ? 1 : 0.18,
-                    ),
-                  ),
-                ),
-                child: Text(
-                  _filters[index],
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: isSelected
-                        ? Colors.black
-                        : Colors.white.withValues(alpha: 0.65),
-                  ),
-                ),
-              ),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-
   Widget _buildCaptureControls() {
+    final bottomInset = MediaQuery.of(context).padding.bottom;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(40, 24, 40, 0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: EdgeInsets.fromLTRB(
+        32,
+        8,
+        32,
+        bottomInset > 0 ? bottomInset - 4 : 12,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _buildCtrlButton(
-            Icons.photo_library_outlined,
-            _onAddFromGallery,
-            !_isBusy,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildCtrlButton(
+                Icons.photo_library_outlined,
+                _onAddFromGallery,
+                !_isBusy,
+              ),
+              _buildCaptureButton(),
+              _buildCtrlButton(
+                _autoCaptureEnabled ? Icons.auto_mode : Icons.touch_app,
+                _toggleAutoCapture,
+                !_isBusy,
+              ),
+            ],
           ),
-          _buildCaptureButton(),
-          _buildCtrlButton(Icons.flip_outlined, () {}, !_isBusy),
+          const SizedBox(height: 10),
+          if (widget.capturedImages.isNotEmpty)
+            Text(
+              '${widget.capturedImages.length} page(s) ready',
+              style: const TextStyle(fontSize: 12, color: Colors.white70),
+            ),
         ],
       ),
     );
@@ -424,7 +719,7 @@ class _ScannerPageState extends State<ScannerPage> {
 
   Widget _buildCaptureButton() {
     return GestureDetector(
-      onTap: _isBusy ? null : _onCapture,
+      onTap: _isBusy ? null : () => _onCapture(autoTriggered: false),
       child: Opacity(
         opacity: _isBusy ? 0.6 : 1,
         child: Container(
@@ -473,13 +768,29 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Future<void> _onCapture() async {
+  void _toggleAutoCapture() {
+    setState(() {
+      _autoCaptureEnabled = !_autoCaptureEnabled;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _autoCaptureEnabled
+              ? 'Auto capture enabled'
+              : 'Auto capture disabled',
+        ),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Future<void> _onCapture({required bool autoTriggered}) async {
     if (_isBusy) return;
 
-    if (!_isStable) {
+    if (_liveAnalyzerAvailable && !_isStable && !autoTriggered) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please hold steady and wait for green frame'),
+          content: Text('No clear page detected. Try again.'),
           duration: Duration(seconds: 2),
         ),
       );
@@ -489,7 +800,14 @@ class _ScannerPageState extends State<ScannerPage> {
     setState(() {
       _isCaptureActionPending = true;
       _isStable = false;
+      _stableFrameCount = 0;
+      _detectionConfidence = 0;
+      _liveStatus = autoTriggered
+          ? 'Auto capture in progress...'
+          : 'Capturing image...';
     });
+
+    await _stopLiveAnalyzer();
 
     try {
       await widget.onCapture();
@@ -497,7 +815,11 @@ class _ScannerPageState extends State<ScannerPage> {
       if (mounted) {
         setState(() {
           _isCaptureActionPending = false;
+          _liveStatus = 'Searching for document...';
         });
+        if (!widget.isAnalyzing) {
+          unawaited(_startLiveAnalyzerIfPossible());
+        }
       }
     }
   }
@@ -506,7 +828,13 @@ class _ScannerPageState extends State<ScannerPage> {
     if (_isBusy) return;
     setState(() {
       _isCaptureActionPending = true;
+      _isStable = false;
+      _stableFrameCount = 0;
+      _detectionConfidence = 0;
+      _liveStatus = 'Adding image from gallery...';
     });
+
+    await _stopLiveAnalyzer();
 
     try {
       await widget.onAddFromGallery();
@@ -514,29 +842,42 @@ class _ScannerPageState extends State<ScannerPage> {
       if (mounted) {
         setState(() {
           _isCaptureActionPending = false;
+          _liveStatus = 'Searching for document...';
         });
+        if (!widget.isAnalyzing) {
+          unawaited(_startLiveAnalyzerIfPossible());
+        }
       }
     }
   }
 
   Widget _buildScanningOverlay() {
     return Container(
-      color: Colors.black.withValues(alpha: 0.62),
+      color: Colors.black.withValues(alpha: 0.64),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: AppColors.green.withValues(alpha: 0.2),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.document_scanner,
-                size: 50,
-                color: Colors.white,
+            SizedBox(
+              width: 120,
+              height: 120,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 90,
+                    height: 90,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: AppColors.green.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.document_scanner_outlined,
+                    size: 48,
+                    color: Colors.white,
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 24),
@@ -563,115 +904,16 @@ class _ScannerPageState extends State<ScannerPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
-            const Text(
-              'Please wait...',
-              style: TextStyle(color: Colors.white70, fontSize: 14),
-            ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildThumbStrip() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Row(
-        children: [
-          ...List.generate(widget.capturedImages.length, (index) {
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: _buildThumbItem(index),
-            );
-          }),
-          _buildThumbAddButton(),
-        ],
-      ),
-    );
-  }
+class _FrameStats {
+  final double confidence;
+  final bool candidate;
 
-  Widget _buildThumbItem(int index) {
-    final image = widget.capturedImages[index];
-    return GestureDetector(
-      onTap: _isBusy ? null : () => widget.onRemoveImage(index),
-      child: Opacity(
-        opacity: _isBusy ? 0.5 : 1,
-        child: Container(
-          width: 44,
-          height: 58,
-          decoration: BoxDecoration(
-            color: const Color(0xFF2A2A28),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-          ),
-          child: Stack(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: Image.file(
-                  image,
-                  width: 44,
-                  height: 58,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Center(
-                      child: Icon(Icons.image, color: Colors.white54, size: 20),
-                    );
-                  },
-                ),
-              ),
-              Positioned(
-                bottom: 3,
-                right: 3,
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                  child: Text(
-                    '${index + 1}',
-                    style: const TextStyle(
-                      fontSize: 9,
-                      color: Colors.white,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildThumbAddButton() {
-    return GestureDetector(
-      onTap: _isBusy ? null : _onAddFromGallery,
-      child: Opacity(
-        opacity: _isBusy ? 0.5 : 1,
-        child: Container(
-          width: 44,
-          height: 58,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.2),
-              style: BorderStyle.solid,
-            ),
-          ),
-          child: Center(
-            child: Icon(
-              Icons.add,
-              size: 18,
-              color: Colors.white.withValues(alpha: 0.3),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  const _FrameStats({required this.confidence, required this.candidate});
 }

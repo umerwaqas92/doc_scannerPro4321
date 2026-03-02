@@ -91,12 +91,53 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _onScannerCapture() async {
     final appState = context.read<AppState>();
-    await appState.captureImage();
+    final beforeCount = appState.capturedImages.length;
+    final captured = await appState.captureImage();
+    if (captured == null) {
+      _showScannerError('No clear document detected. Try again.');
+      return;
+    }
+    _validateLastCapturedDocument(beforeCount);
   }
 
   Future<void> _onScannerAddFromGallery() async {
     final appState = context.read<AppState>();
+    final beforeCount = appState.capturedImages.length;
     await appState.addImageFromGallery();
+    _validateLastCapturedDocument(
+      beforeCount,
+      errorMessage: 'Selected image is not a clear document. Try again.',
+    );
+  }
+
+  void _validateLastCapturedDocument(
+    int previousCount, {
+    String errorMessage = 'No clear document detected. Try again.',
+  }) {
+    final appState = context.read<AppState>();
+    if (appState.capturedImages.length <= previousCount) return;
+
+    final index = appState.capturedImages.length - 1;
+    final pipeline = index < appState.pipelineResults.length
+        ? appState.pipelineResults[index]
+        : null;
+
+    final invalidDocument =
+        pipeline == null ||
+        pipeline.detectionConfidence < 0.18 ||
+        (pipeline.usedFallback && pipeline.detectionConfidence < 0.34);
+
+    if (!invalidDocument) return;
+
+    appState.removeCapturedImage(index);
+    _showScannerError(errorMessage);
+  }
+
+  void _showScannerError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _onScannerDone() async {
@@ -109,26 +150,36 @@ class _MainScreenState extends State<MainScreen> {
       }
       return;
     }
-    await appState.disposeCamera();
 
     if (appState.capturedImages.isNotEmpty) {
       setState(() {
         _showScanner = false;
         _showEdit = true;
+        _showResult = false;
       });
+      await appState.disposeCamera();
+      return;
     }
-  }
-
-  void _onScannerCancel() async {
-    final appState = context.read<AppState>();
-    appState.clearCapturedImages();
-    await appState.disposeCamera();
 
     setState(() {
       _showScanner = false;
       _showEdit = false;
       _showResult = false;
     });
+    await appState.disposeCamera();
+  }
+
+  void _onScannerCancel() async {
+    final appState = context.read<AppState>();
+    appState.clearCapturedImages();
+
+    setState(() {
+      _showScanner = false;
+      _showEdit = false;
+      _showResult = false;
+    });
+
+    await appState.disposeCamera();
   }
 
   void _onResultRetry() async {
@@ -179,46 +230,6 @@ class _MainScreenState extends State<MainScreen> {
   void _onResultRemoveImage(int index) {
     final appState = context.read<AppState>();
     appState.removeCapturedImage(index);
-  }
-
-  int _filterIndexFromMode(DocumentFilterMode mode) {
-    switch (mode) {
-      case DocumentFilterMode.original:
-        return 2;
-      case DocumentFilterMode.blackWhite:
-        return 1;
-      case DocumentFilterMode.colorEnhanced:
-        return 0;
-      case DocumentFilterMode.grayscale:
-        return 3;
-      case DocumentFilterMode.highContrastText:
-        return 4;
-      case DocumentFilterMode.warmPaper:
-        return 5;
-      case DocumentFilterMode.photoNatural:
-        return 6;
-    }
-  }
-
-  DocumentFilterMode _modeFromFilterIndex(int index) {
-    switch (index) {
-      case 0:
-        return DocumentFilterMode.colorEnhanced;
-      case 1:
-        return DocumentFilterMode.blackWhite;
-      case 2:
-        return DocumentFilterMode.original;
-      case 3:
-        return DocumentFilterMode.grayscale;
-      case 4:
-        return DocumentFilterMode.highContrastText;
-      case 5:
-        return DocumentFilterMode.warmPaper;
-      case 6:
-        return DocumentFilterMode.photoNatural;
-      default:
-        return DocumentFilterMode.colorEnhanced;
-    }
   }
 
   void _onEditContinue(List<EditSessionState> sessions) {
@@ -296,12 +307,7 @@ class _MainScreenState extends State<MainScreen> {
         isCameraInitialized: appState.cameraInitialized,
         isAnalyzing: appState.isAnalyzing,
         analysisStageText: appState.analysisStageText,
-        selectedFilterIndex: _filterIndexFromMode(appState.captureFilterMode),
-        onFilterChanged: (index) {
-          appState.setCaptureFilterMode(_modeFromFilterIndex(index));
-        },
         capturedImages: appState.capturedImages,
-        onRemoveImage: (index) => appState.removeCapturedImage(index),
         onCancel: _onScannerCancel,
         onDone: _onScannerDone,
         onCapture: _onScannerCapture,
