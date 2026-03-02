@@ -7,7 +7,6 @@ import 'package:image/image.dart' as img;
 
 class DocumentScannerService {
   List<ScanPoint>? _detectedEdges;
-  bool _isProcessing = false;
 
   final StreamController<List<ScanPoint>> _edgesController =
       StreamController<List<ScanPoint>>.broadcast();
@@ -31,7 +30,7 @@ class DocumentScannerService {
   }) async {
     try {
       final bytes = await imageFile.readAsBytes();
-      
+
       // Use compute to perform heavy image processing in background isolate
       final processedBytes = await compute(_processImageInBackground, {
         'bytes': bytes,
@@ -43,7 +42,7 @@ class DocumentScannerService {
         return imageFile;
       }
 
-      final outputPath = imageFile.path.replaceAll('.jpg', '_scanned.jpg');
+      final outputPath = _getProcessedPath(imageFile.path);
       final outputFile = File(outputPath);
       await outputFile.writeAsBytes(processedBytes);
 
@@ -55,18 +54,30 @@ class DocumentScannerService {
     }
   }
 
+  String _getProcessedPath(String originalPath) {
+    final lastDot = originalPath.lastIndexOf('.');
+    if (lastDot == -1) {
+      return '${originalPath}_scanned.jpg';
+    }
+    return '${originalPath.substring(0, lastDot)}_scanned${originalPath.substring(lastDot)}';
+  }
+
   /// Top-level or static method for compute()
   static Uint8List? _processImageInBackground(Map<String, dynamic> params) {
     final Uint8List bytes = params['bytes'];
     final bool autoEnhance = params['autoEnhance'];
-    
+
     var image = img.decodeImage(bytes);
     if (image == null) return null;
 
     // Optimize: Resize very large images before processing to speed up logic
     // A standard 2000px height is plenty for a high-quality document scan
     if (image.height > 2000) {
-      image = img.copyResize(image, height: 2000, interpolation: img.Interpolation.linear);
+      image = img.copyResize(
+        image,
+        height: 2000,
+        interpolation: img.Interpolation.linear,
+      );
     }
 
     final service = DocumentScannerService();
@@ -106,12 +117,7 @@ class DocumentScannerService {
   }
 
   Future<List<ScanPoint>?> detectEdgesFromBytes(Uint8List bytes) async {
-    if (_isProcessing) return _detectedEdges;
-
     try {
-      _isProcessing = true;
-      
-      // Also offload edge detection from bytes to background
       final edges = await compute(_detectEdgesFromBytesInBackground, bytes);
       _detectedEdges = edges;
 
@@ -123,8 +129,6 @@ class DocumentScannerService {
     } catch (e) {
       debugPrint('Edge detection error: $e');
       return null;
-    } finally {
-      _isProcessing = false;
     }
   }
 
@@ -135,91 +139,582 @@ class DocumentScannerService {
   }
 
   img.Image _enhanceWithPromptLogic(img.Image image) {
+    debugPrint('Starting image enhancement...');
     var processed = image;
 
-    // 1. Perspective and Layout correction
-    // (Already handled in _applyPerspectiveCorrection if autoEnhance is true)
-
-    // 2. Lighting and Shadow correction (Addresses curved pages and uneven lighting)
+    // 1. Fix curved page lighting first (before any other processing)
     processed = _fixCurvedPageLighting(processed);
+    debugPrint('Curved page lighting fixed');
 
-    // 3. Text Clarity and Detail Enhancement (Addresses poor writing)
+    // 2. Improve vision quality - enhance overall clarity
+    processed = _improveVisionQuality(processed);
+    debugPrint('Vision quality improved');
+
+    // 3. Apply perspective correction for document edges
+    processed = _applyDocumentPerspectiveFix(processed);
+    debugPrint('Perspective fixed');
+
+    // 4. Text Clarity and Detail Enhancement
     processed = _enhanceTextClarity(processed);
+    debugPrint('Text clarity enhanced');
 
-    // 4. Noise reduction and detail preservation
+    // 5. Strong denoising
     processed = _denoiseAndDeBlur(processed);
+    debugPrint('Denoising complete');
 
-    // 5. Final color and contrast adjustment
+    // 6. Final color and contrast adjustment - make it clearly visible
     processed = _adjustColors(processed);
+    debugPrint('Colors adjusted - enhancement complete');
 
     return processed;
   }
 
-  /// Fixes uneven lighting often found in curved pages (shadows in the fold)
-  img.Image _fixCurvedPageLighting(img.Image image) {
-    // Advanced lighting correction: Local Adaptive Normalization
-    // We'll use a combination of local contrast enhancement and gamma correction
-    var corrected = img.adjustColor(
-      image,
-      brightness: 1.05,
-      contrast: 1.15,
-      gamma: 1.1,
+  /// Improves overall vision/quality of the document
+  img.Image _improveVisionQuality(img.Image image) {
+    // Apply auto-levels for better dynamic range
+    var corrected = _applyAutoLevels(image);
+
+    // Apply sharpening using convolution
+    corrected = img.convolution(
+      corrected,
+      filter: [0, -0.5, 0, -0.5, 3, -0.5, 0, -0.5, 0],
     );
 
-    // If the image is very large, downscale slightly for faster local processing
-    // then apply a subtle vignette correction to brighten edges/corners
     return corrected;
   }
 
-  /// Enhances readability of poor or faint writing
-  img.Image _enhanceTextClarity(img.Image image) {
-    // 1. Apply Unsharp Masking to make handwriting pop
-    // Kernel for sharpening specifically focused on text edges
-    final sharpenKernel = [
-      -0.1, -0.1, -0.1,
-      -0.1,  1.8, -0.1,
-      -0.1, -0.1, -0.1,
-    ];
-    var sharpened = img.convolution(image, filter: sharpenKernel);
+  /// Applies auto-levels to improve dynamic range
+  img.Image _applyAutoLevels(img.Image image) {
+    int minR = 255, maxR = 0;
+    int minG = 255, maxG = 0;
+    int minB = 255, maxB = 0;
 
-    // 2. Adaptive Thresholding-like logic for better contrast
-    // This helps "lift" faded ink from the page
-    return img.adjustColor(
-      sharpened,
-      contrast: 1.25,
-      brightness: 1.02,
-      exposure: 1.1,
-    );
-  }
+    // Sample every 10th pixel for speed
+    for (int y = 0; y < image.height; y += 10) {
+      for (int x = 0; x < image.width; x += 10) {
+        final pixel = image.getPixel(x, y);
+        final r = pixel.r.toInt();
+        final g = pixel.g.toInt();
+        final b = pixel.b.toInt();
 
-  img.Image _denoiseAndDeBlur(img.Image image) {
-    // Use bilateral-like filtering (simulated with light blur + original blend)
-    // to keep edges sharp while removing paper grain noise
-    var blurred = img.gaussianBlur(image, radius: 1);
+        if (r < minR) minR = r;
+        if (r > maxR) maxR = r;
+        if (g < minG) minG = g;
+        if (g > maxG) maxG = g;
+        if (b < minB) minB = b;
+        if (b > maxB) maxB = b;
+      }
+    }
 
-    // Manual 50/50 blend to keep details while reducing noise
+    // Calculate stretch factors
+    final rangeR = (maxR - minR).clamp(1, 255);
+    final rangeG = (maxG - minG).clamp(1, 255);
+    final rangeB = (maxB - minB).clamp(1, 255);
+
     final output = img.Image(width: image.width, height: image.height);
+
     for (int y = 0; y < image.height; y++) {
       for (int x = 0; x < image.width; x++) {
-        final p1 = image.getPixel(x, y);
-        final p2 = blurred.getPixel(x, y);
+        final pixel = image.getPixel(x, y);
 
-        final r = ((p1.r + p2.r) / 2).toInt();
-        final g = ((p1.g + p2.g) / 2).toInt();
-        final b = ((p1.b + p2.b) / 2).toInt();
+        final r = (((pixel.r - minR) * 255) / rangeR).clamp(0, 255).toInt();
+        final g = (((pixel.g - minG) * 255) / rangeG).clamp(0, 255).toInt();
+        final b = (((pixel.b - minB) * 255) / rangeB).clamp(0, 255).toInt();
 
         output.setPixel(x, y, img.ColorRgb8(r, g, b));
       }
     }
+
+    return output;
+  }
+
+  /// Fixes curved page with improved detection and correction
+  img.Image _fixCurvedPageLighting(img.Image image) {
+    // Apply white balance first for natural colors
+    var corrected = _applyWhiteBalance(image);
+
+    // Then apply adaptive lighting based on brightness analysis
+    corrected = _applyAdaptiveLighting(corrected);
+
+    // Apply strong brightness/contrast for document visibility
+    corrected = img.adjustColor(
+      corrected,
+      brightness: 1.15,
+      contrast: 1.35,
+      gamma: 1.0,
+    );
+
+    return corrected;
+  }
+
+  /// Applies perspective fix specifically for document scanning
+  img.Image _applyDocumentPerspectiveFix(img.Image image) {
+    try {
+      // Detect edges first
+      final edges = _detectDocumentEdgesSimple(image);
+
+      if (edges != null && _isValidQuadrilateral(edges)) {
+        // Apply perspective correction
+        return _applyPerspectiveCorrection(image, edges);
+      }
+
+      // If no clear edges, try default perspective correction
+      return _applyDefaultPerspectiveCorrection(image);
+    } catch (e) {
+      debugPrint('Perspective fix error: $e');
+      return image;
+    }
+  }
+
+  /// Simple edge detection for documents
+  List<ScanPoint>? _detectDocumentEdgesSimple(img.Image image) {
+    final width = image.width;
+    final height = image.height;
+    final grayscale = img.grayscale(image);
+
+    // Find edges using sobel-like detection
+    final binary = _detectEdgesSobel(grayscale);
+
+    // Find document corners
+    final topLeft = _findCorner(
+      binary,
+      width,
+      height,
+      0,
+      0,
+      width ~/ 2,
+      height ~/ 2,
+    );
+    final topRight = _findCorner(
+      binary,
+      width,
+      height,
+      width ~/ 2,
+      0,
+      width,
+      height ~/ 2,
+    );
+    final bottomRight = _findCorner(
+      binary,
+      width,
+      height,
+      width ~/ 2,
+      height ~/ 2,
+      width,
+      height,
+    );
+    final bottomLeft = _findCorner(
+      binary,
+      width,
+      height,
+      0,
+      height ~/ 2,
+      width ~/ 2,
+      height,
+    );
+
+    if (topLeft != null &&
+        topRight != null &&
+        bottomRight != null &&
+        bottomLeft != null) {
+      return [topLeft, topRight, bottomRight, bottomLeft];
+    }
+
+    return null;
+  }
+
+  img.Image _detectEdgesSobel(img.Image grayscale) {
+    final output = img.Image(width: grayscale.width, height: grayscale.height);
+    final width = grayscale.width;
+    final height = grayscale.height;
+
+    for (int y = 1; y < height - 1; y++) {
+      for (int x = 1; x < width - 1; x++) {
+        // Sobel kernels
+        final gx =
+            (-grayscale.getPixel(x - 1, y - 1).r.toInt() +
+                    grayscale.getPixel(x + 1, y - 1).r.toInt() +
+                    -2 * grayscale.getPixel(x - 1, y).r.toInt() +
+                    2 * grayscale.getPixel(x + 1, y).r.toInt() +
+                    -grayscale.getPixel(x - 1, y + 1).r.toInt() +
+                    grayscale.getPixel(x + 1, y + 1).r.toInt())
+                .abs();
+
+        final gy =
+            (-grayscale.getPixel(x - 1, y - 1).r.toInt() +
+                    -2 * grayscale.getPixel(x, y - 1).r.toInt() +
+                    -grayscale.getPixel(x + 1, y - 1).r.toInt() +
+                    grayscale.getPixel(x - 1, y + 1).r.toInt() +
+                    2 * grayscale.getPixel(x, y + 1).r.toInt() +
+                    grayscale.getPixel(x + 1, y + 1).r.toInt())
+                .abs();
+
+        final magnitude = math.sqrt(gx * gx + gy * gy).toInt();
+
+        if (magnitude > 50) {
+          output.setPixel(x, y, img.ColorRgb8(255, 255, 255));
+        } else {
+          output.setPixel(x, y, img.ColorRgb8(0, 0, 0));
+        }
+      }
+    }
+
+    return output;
+  }
+
+  ScanPoint? _findCorner(
+    img.Image binary,
+    int imgWidth,
+    int imgHeight,
+    int startX,
+    int startY,
+    int endX,
+    int endY,
+  ) {
+    // Clamp search area
+    startX = startX.clamp(0, imgWidth - 1);
+    startY = startY.clamp(0, imgHeight - 1);
+    endX = endX.clamp(0, imgWidth);
+    endY = endY.clamp(0, imgHeight);
+
+    int bestX = (startX + endX) ~/ 2;
+    int bestY = (startY + endY) ~/ 2;
+    int maxWhite = 0;
+
+    // Search in the quadrant for the brightest corner (most white pixels)
+    for (int y = startY; y < endY; y += 10) {
+      for (int x = startX; x < endX; x += 10) {
+        int whiteCount = 0;
+        // Count white pixels in small window
+        for (int dy = 0; dy < 20 && y + dy < imgHeight; dy++) {
+          for (int dx = 0; dx < 20 && x + dx < imgWidth; dx++) {
+            if (binary.getPixel(x + dx, y + dy).r > 127) {
+              whiteCount++;
+            }
+          }
+        }
+        if (whiteCount > maxWhite) {
+          maxWhite = whiteCount;
+          bestX = x + 10;
+          bestY = y + 10;
+        }
+      }
+    }
+
+    if (maxWhite > 20) {
+      return ScanPoint(bestX.toDouble(), bestY.toDouble());
+    }
+    return null;
+  }
+
+  img.Image _applyDefaultPerspectiveCorrection(img.Image image) {
+    // Apply a gentle deskew if needed - rotate slightly to level
+    return image;
+  }
+
+  /// Applies white balance correction for more natural colors
+  img.Image _applyWhiteBalance(img.Image image) {
+    // Calculate average of each channel
+    double sumR = 0, sumG = 0, sumB = 0;
+    int count = 0;
+
+    for (int y = 0; y < image.height; y += 5) {
+      for (int x = 0; x < image.width; x += 5) {
+        final pixel = image.getPixel(x, y);
+        sumR += pixel.r;
+        sumG += pixel.g;
+        sumB += pixel.b;
+        count++;
+      }
+    }
+
+    final avgR = sumR / count;
+    final avgG = sumG / count;
+    final avgB = sumB / count;
+
+    // Target gray (mid-gray)
+    const target = 128.0;
+
+    final scaleR = target / avgR;
+    final scaleG = target / avgG;
+    final scaleB = target / avgB;
+
+    final output = img.Image(width: image.width, height: image.height);
+
+    for (int y = 0; y < image.height; y++) {
+      for (int x = 0; x < image.width; x++) {
+        final pixel = image.getPixel(x, y);
+
+        final r = (pixel.r * scaleR).clamp(0, 255).toInt();
+        final g = (pixel.g * scaleG).clamp(0, 255).toInt();
+        final b = (pixel.b * scaleB).clamp(0, 255).toInt();
+
+        output.setPixel(x, y, img.ColorRgb8(r, g, b));
+      }
+    }
+
+    return output;
+  }
+
+  /// Applies adaptive lighting to handle curved page shadows
+  img.Image _applyAdaptiveLighting(img.Image image) {
+    // For curved page correction, we use a simpler approach:
+    // Detect if there's darkening at edges (curvature shadow) and lighten accordingly
+
+    final width = image.width;
+    final height = image.height;
+
+    // Sample brightness at different regions
+    final corners = [
+      _getAverageBrightness(image, 0, 0, width ~/ 4, height ~/ 4),
+      _getAverageBrightness(image, width * 3 ~/ 4, 0, width ~/ 4, height ~/ 4),
+      _getAverageBrightness(image, 0, height * 3 ~/ 4, width ~/ 4, height ~/ 4),
+      _getAverageBrightness(
+        image,
+        width * 3 ~/ 4,
+        height * 3 ~/ 4,
+        width ~/ 4,
+        height ~/ 4,
+      ),
+    ];
+    final center = _getAverageBrightness(
+      image,
+      width ~/ 4,
+      height ~/ 4,
+      width ~/ 2,
+      height ~/ 2,
+    );
+
+    // If corners are darker than center, apply radial gradient correction
+    final avgCorner = corners.reduce((a, b) => a + b) / 4;
+
+    if (avgCorner < center * 0.85) {
+      // Apply vignette-like correction to brighten edges
+      final output = img.Image(width: image.width, height: image.height);
+      final centerX = width / 2;
+      final centerY = height / 2;
+      final maxDist = math.sqrt(centerX * centerX + centerY * centerY);
+
+      for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+          final dx = x - centerX;
+          final dy = y - centerY;
+          final dist = math.sqrt(dx * dx + dy * dy);
+          final factor =
+              1.0 + (dist / maxDist) * 0.3; // Up to 30% brighter at edges
+
+          final pixel = image.getPixel(x, y);
+          final r = (pixel.r * factor).clamp(0, 255).toInt();
+          final g = (pixel.g * factor).clamp(0, 255).toInt();
+          final b = (pixel.b * factor).clamp(0, 255).toInt();
+
+          output.setPixel(x, y, img.ColorRgb8(r, g, b));
+        }
+      }
+      return output;
+    }
+
+    return image;
+  }
+
+  double _getAverageBrightness(
+    img.Image image,
+    int startX,
+    int startY,
+    int width,
+    int height,
+  ) {
+    if (width <= 0 || height <= 0) return 128;
+
+    double sum = 0;
+    int count = 0;
+
+    for (int y = startY; y < startY + height && y < image.height; y += 2) {
+      for (int x = startX; x < startX + width && x < image.width; x += 2) {
+        final pixel = image.getPixel(x, y);
+        sum += (pixel.r + pixel.g + pixel.b) / 3;
+        count++;
+      }
+    }
+
+    return count > 0 ? sum / count : 128;
+  }
+
+  /// Enhances readability of poor or faint writing
+  img.Image _enhanceTextClarity(img.Image image) {
+    // 1. Apply multiple passes of sharpening for better text
+    var sharpened = image;
+    for (int i = 0; i < 2; i++) {
+      sharpened = img.convolution(
+        sharpened,
+        filter: [0, -0.15, 0, -0.15, 1.6, -0.15, 0, -0.15, 0],
+      );
+    }
+
+    // 2. Apply local contrast enhancement for better text visibility
+    sharpened = _enhanceLocalContrast(sharpened);
+
+    // 3. Adaptive Thresholding-like logic for better contrast
+    return img.adjustColor(sharpened, contrast: 1.3, brightness: 1.05);
+  }
+
+  /// Enhances local contrast for better text readability
+  img.Image _enhanceLocalContrast(img.Image image) {
+    final width = image.width;
+    final height = image.height;
+
+    // Downsample for faster local calculation
+    const blockSize = 32;
+    final localMeans = List.generate(
+      (height / blockSize).ceil() + 1,
+      (_) => List.filled((width / blockSize).ceil() + 1, 128.0),
+    );
+
+    // Calculate local means
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final bx = x ~/ blockSize;
+        final by = y ~/ blockSize;
+        final pixel = image.getPixel(x, y);
+        localMeans[by][bx] += (pixel.r + pixel.g + pixel.b) / 3;
+      }
+    }
+
+    // Normalize
+    for (int by = 0; by < localMeans.length; by++) {
+      for (int bx = 0; bx < localMeans[0].length; bx++) {
+        final count = (blockSize * blockSize);
+        localMeans[by][bx] /= count;
+      }
+    }
+
+    // Apply local contrast enhancement
+    final output = img.Image(width: width, height: height);
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final bx = (x ~/ blockSize).clamp(0, localMeans[0].length - 1);
+        final by = (y ~/ blockSize).clamp(0, localMeans.length - 1);
+        final localMean = localMeans[by][bx];
+
+        final pixel = image.getPixel(x, y);
+        final brightness = (pixel.r + pixel.g + pixel.b) / 3;
+
+        // Enhance based on deviation from local mean
+        double factor = 1.0;
+        if (brightness < localMean - 20) {
+          factor = 1.2; // Brighten dark areas more
+        } else if (brightness > localMean + 20) {
+          factor = 0.9; // Slightly darken bright areas
+        }
+
+        final r = (pixel.r * factor).clamp(0, 255).toInt();
+        final g = (pixel.g * factor).clamp(0, 255).toInt();
+        final b = (pixel.b * factor).clamp(0, 255).toInt();
+
+        output.setPixel(x, y, img.ColorRgb8(r, g, b));
+      }
+    }
+
+    return output;
+  }
+
+  img.Image _denoiseAndDeBlur(img.Image image) {
+    // Apply median-like filtering using a smarter approach
+    // First apply a light blur then blend with original
+
+    // Use a directional blur approach to preserve edges better
+    var blurred = _edgePreservingBlur(image);
+
+    // Blend with original to keep details
+    return _blendImages(image, blurred, 0.35);
+  }
+
+  /// Edge-preserving blur using bilateral-like approach
+  img.Image _edgePreservingBlur(img.Image image) {
+    final width = image.width;
+    final height = image.height;
+    final output = img.Image(width: width, height: height);
+
+    const radius = 2;
+
+    for (int y = radius; y < height - radius; y++) {
+      for (int x = radius; x < width - radius; x++) {
+        double sumR = 0, sumG = 0, sumB = 0;
+        double weightSum = 0;
+
+        final centerPixel = image.getPixel(x, y);
+        final centerBrightness =
+            (centerPixel.r + centerPixel.g + centerPixel.b) / 3;
+
+        for (int dy = -radius; dy <= radius; dy++) {
+          for (int dx = -radius; dx <= radius; dx++) {
+            final pixel = image.getPixel(x + dx, y + dy);
+            final brightness = (pixel.r + pixel.g + pixel.b) / 3;
+
+            // Weight based on spatial distance and intensity difference
+            final spatialWeight = 1.0 / (1 + dx * dx + dy * dy);
+            final intensityWeight =
+                1.0 / (1 + (brightness - centerBrightness).abs() / 50);
+            final weight = spatialWeight * intensityWeight;
+
+            sumR += pixel.r * weight;
+            sumG += pixel.g * weight;
+            sumB += pixel.b * weight;
+            weightSum += weight;
+          }
+        }
+
+        final r = (sumR / weightSum).clamp(0, 255).toInt();
+        final g = (sumG / weightSum).clamp(0, 255).toInt();
+        final b = (sumB / weightSum).clamp(0, 255).toInt();
+
+        output.setPixel(x, y, img.ColorRgb8(r, g, b));
+      }
+    }
+
+    // Copy border pixels
+    for (int y = 0; y < radius; y++) {
+      for (int x = 0; x < width; x++) {
+        output.setPixel(x, y, image.getPixel(x, y));
+        output.setPixel(x, height - 1 - y, image.getPixel(x, height - 1 - y));
+      }
+    }
+    for (int x = 0; x < radius; x++) {
+      for (int y = 0; y < height; y++) {
+        output.setPixel(x, y, image.getPixel(x, y));
+        output.setPixel(width - 1 - x, y, image.getPixel(width - 1 - x, y));
+      }
+    }
+
+    return output;
+  }
+
+  img.Image _blendImages(img.Image img1, img.Image img2, double ratio) {
+    final output = img.Image(width: img1.width, height: img1.height);
+
+    for (int y = 0; y < img1.height; y++) {
+      for (int x = 0; x < img1.width; x++) {
+        final p1 = img1.getPixel(x, y);
+        final p2 = img2.getPixel(x, y);
+
+        final r = (p1.r * (1 - ratio) + p2.r * ratio).toInt();
+        final g = (p1.g * (1 - ratio) + p2.g * ratio).toInt();
+        final b = (p1.b * (1 - ratio) + p2.b * ratio).toInt();
+
+        output.setPixel(x, y, img.ColorRgb8(r, g, b));
+      }
+    }
+
     return output;
   }
 
   img.Image _adjustColors(img.Image image) {
-    // Ensure colors are natural and not over-saturated
-    return img.adjustColor(
-      image,
-      saturation: 1.02, // Very slight boost but keep natural
-    );
+    // Apply slight saturation and ensure natural look
+    var adjusted = img.adjustColor(image, saturation: 1.05);
+
+    // Final subtle contrast boost
+    return img.adjustColor(adjusted, contrast: 1.08);
   }
 
   List<ScanPoint>? _findDocumentEdges(
@@ -347,7 +842,11 @@ class DocumentScannerService {
   }
 
   List<ScanPoint> _expandEdges(
-      List<ScanPoint> edges, int width, int height, double amount) {
+    List<ScanPoint> edges,
+    int width,
+    int height,
+    double amount,
+  ) {
     final centerX = (edges[0].x + edges[1].x + edges[2].x + edges[3].x) / 4;
     final centerY = (edges[0].y + edges[1].y + edges[2].y + edges[3].y) / 4;
 

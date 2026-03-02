@@ -75,34 +75,50 @@ class AppState extends ChangeNotifier {
   Future<File?> captureImage() async {
     debugPrint('AppState: captureImage called');
     final image = await _cameraService.captureImage();
-    debugPrint('AppState: image captured, processing background...');
-    
+    debugPrint('AppState: image captured, processing...');
+
     if (image != null) {
-      // Step 1: Add the raw image to the list immediately for instant UI feedback
       _capturedImages.add(image);
-      notifyListeners(); // This makes the thumbnail appear instantly
-      
-      // Step 2: Process the image in the background without blocking the capture flow
-      // We'll replace the raw image in the list once it's enhanced
-      _processImageInBackgroundAsync(image);
+      notifyListeners();
+
+      await _processImageInBackgroundAsync(image);
     }
     return image;
   }
 
   Future<void> _processImageInBackgroundAsync(File image) async {
     try {
+      debugPrint('AppState: Starting background processing for: ${image.path}');
+
       final processedImage = await _documentScannerService.processDocument(
         image,
         autoEnhance: true,
       );
-      
+
+      debugPrint(
+        'AppState: Processing complete. Original: ${image.path}, Processed: ${processedImage?.path}',
+      );
+
       if (processedImage != null && processedImage.path != image.path) {
-        final index = _capturedImages.indexOf(image);
+        final originalPath = image.path;
+        final index = _capturedImages.indexWhere((f) => f.path == originalPath);
+        debugPrint('AppState: Found image at index: $index');
+
         if (index != -1) {
           _capturedImages[index] = processedImage;
           debugPrint('AppState: Raw image replaced with processed version');
           notifyListeners();
+        } else {
+          debugPrint(
+            'AppState: Image not found in list - might have been removed',
+          );
         }
+      } else if (processedImage != null) {
+        debugPrint(
+          'AppState: Processed image has same path as original - checking if it was actually processed',
+        );
+      } else {
+        debugPrint('AppState: Processing returned null - keeping original');
       }
     } catch (e) {
       debugPrint('AppState: Background processing error: $e');

@@ -123,7 +123,9 @@ class _ScannerPageState extends State<ScannerPage> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            widget.isCameraInitialized && widget.cameraController != null
+            widget.isCameraInitialized &&
+                    widget.cameraController != null &&
+                    widget.cameraController!.value.isInitialized
                 ? CameraPreview(widget.cameraController!)
                 : _buildCameraPlaceholder(),
             _buildViewfinderOverlay(),
