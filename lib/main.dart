@@ -12,6 +12,7 @@ import 'pages/doc_view_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
 import 'services/app_state.dart';
+import 'models/scan_pipeline_models.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +49,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   bool _showScanner = false;
+  bool _showEdit = false;
   bool _showResult = false;
   bool _showSplash = true;
 
@@ -55,6 +57,7 @@ class _MainScreenState extends State<MainScreen> {
     setState(() {
       _currentIndex = index;
       _showScanner = false;
+      _showEdit = false;
       _showResult = false;
     });
   }
@@ -62,6 +65,7 @@ class _MainScreenState extends State<MainScreen> {
   void _onScanTap() async {
     setState(() {
       _showScanner = true;
+      _showEdit = false;
       _showResult = false;
     });
 
@@ -102,7 +106,7 @@ class _MainScreenState extends State<MainScreen> {
     if (appState.capturedImages.isNotEmpty) {
       setState(() {
         _showScanner = false;
-        _showResult = true;
+        _showEdit = true;
       });
     }
   }
@@ -114,6 +118,8 @@ class _MainScreenState extends State<MainScreen> {
 
     setState(() {
       _showScanner = false;
+      _showEdit = false;
+      _showResult = false;
     });
   }
 
@@ -123,6 +129,7 @@ class _MainScreenState extends State<MainScreen> {
 
     setState(() {
       _showResult = false;
+      _showEdit = false;
       _showScanner = true;
     });
 
@@ -135,6 +142,7 @@ class _MainScreenState extends State<MainScreen> {
 
     setState(() {
       _showResult = false;
+      _showEdit = false;
       _currentIndex = 0;
     });
 
@@ -151,6 +159,7 @@ class _MainScreenState extends State<MainScreen> {
   void _onResultBack() {
     setState(() {
       _showResult = false;
+      _showEdit = true;
     });
   }
 
@@ -162,6 +171,25 @@ class _MainScreenState extends State<MainScreen> {
   void _onResultRemoveImage(int index) {
     final appState = context.read<AppState>();
     appState.removeCapturedImage(index);
+  }
+
+  void _onEditContinue(List<EditSessionState> sessions) {
+    final appState = context.read<AppState>();
+    appState.applyEditSessions(sessions);
+
+    setState(() {
+      _showEdit = false;
+      _showResult = true;
+    });
+  }
+
+  void _onEditBack() async {
+    final appState = context.read<AppState>();
+    setState(() {
+      _showEdit = false;
+      _showScanner = true;
+    });
+    await appState.initializeCamera();
   }
 
   void _onDocViewBack() {
@@ -192,9 +220,10 @@ class _MainScreenState extends State<MainScreen> {
           body: SafeArea(
             child: Column(
               children: [
-                if (!_showScanner && !_showResult) const StatusBarWidget(),
+                if (!_showScanner && !_showResult && !_showEdit)
+                  const StatusBarWidget(),
                 Expanded(child: _buildCurrentPage(appState)),
-                if (!_showScanner && !_showResult)
+                if (!_showScanner && !_showResult && !_showEdit)
                   BottomNavWidget(
                     currentIndex: _currentIndex > 4 ? 0 : _currentIndex,
                     onTap: _onNavTap,
@@ -223,6 +252,16 @@ class _MainScreenState extends State<MainScreen> {
       );
     }
 
+    // Edit Page
+    if (_showEdit) {
+      return ImageEditPage(
+        images: appState.capturedImages,
+        pipelineResults: appState.pipelineResults,
+        onBack: _onEditBack,
+        onContinue: _onEditContinue,
+      );
+    }
+
     // Result Page
     if (_showResult) {
       return ScanResultPage(
@@ -236,21 +275,6 @@ class _MainScreenState extends State<MainScreen> {
         onAddMore: _onResultAddMore,
         onProcessOcr: () => appState.processOcrForAllImages(),
         onTextChanged: (text) {},
-        onEdit: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ImageEditPage(
-                images: appState.capturedImages,
-                onSave: (editedImages) {
-                  appState.capturedImages.clear();
-                  appState.capturedImages.addAll(editedImages);
-                  Navigator.pop(context);
-                },
-              ),
-            ),
-          );
-        },
       );
     }
 

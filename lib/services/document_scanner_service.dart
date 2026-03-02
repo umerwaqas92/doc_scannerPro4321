@@ -116,6 +116,58 @@ class DocumentScannerService {
     return '${originalPath.substring(0, lastDot)}_adjusted${originalPath.substring(lastDot)}';
   }
 
+  Future<File?> preprocessForDetection(
+    File imageFile, {
+    int maxHeight = 2200,
+  }) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      image = _preprocessResize(image, maxHeight);
+      image = _preprocessGrayscale(image);
+      image = _preprocessBlur(image);
+      image = _preprocessNormalize(image);
+
+      final outputPath = _buildDerivedPath(imageFile.path, 'preprocessed');
+      final outputFile = File(outputPath);
+      await outputFile.writeAsBytes(img.encodeJpg(image, quality: 95));
+      return outputFile;
+    } catch (e) {
+      debugPrint('Error pre-processing image: $e');
+      return null;
+    }
+  }
+
+  Future<File?> applyPerspectiveFromCorners(
+    File imageFile,
+    List<ScanPoint> corners, {
+    String suffix = 'warped',
+  }) async {
+    try {
+      if (corners.length != 4) return imageFile;
+      final bytes = await imageFile.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return imageFile;
+
+      final warped = _applyPerspectiveCorrection(decoded, corners);
+      final outputPath = _buildDerivedPath(imageFile.path, suffix);
+      final outputFile = File(outputPath);
+      await outputFile.writeAsBytes(img.encodeJpg(warped, quality: 95));
+      return outputFile;
+    } catch (e) {
+      debugPrint('Error applying perspective: $e');
+      return imageFile;
+    }
+  }
+
+  String _buildDerivedPath(String originalPath, String suffix) {
+    final dot = originalPath.lastIndexOf('.');
+    if (dot == -1) return '${originalPath}_$suffix.jpg';
+    return '${originalPath.substring(0, dot)}_$suffix${originalPath.substring(dot)}';
+  }
+
   static img.Image _preprocessResize(img.Image image, int maxHeight) {
     if (image.height > maxHeight) {
       return img.copyResize(

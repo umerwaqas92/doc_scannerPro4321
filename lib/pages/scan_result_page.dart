@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../services/ocr_service.dart';
-import '../services/document_scanner_service.dart';
 
 class ScanResultPage extends StatefulWidget {
   final List<File> scannedImages;
@@ -15,7 +14,6 @@ class ScanResultPage extends StatefulWidget {
   final VoidCallback onAddMore;
   final VoidCallback onProcessOcr;
   final Function(String) onTextChanged;
-  final VoidCallback onEdit;
 
   const ScanResultPage({
     super.key,
@@ -29,7 +27,6 @@ class ScanResultPage extends StatefulWidget {
     required this.onAddMore,
     required this.onProcessOcr,
     required this.onTextChanged,
-    required this.onEdit,
   });
 
   @override
@@ -572,19 +569,6 @@ class _ScanResultPageState extends State<ScanResultPage>
               onPressed: widget.onAddMore,
               icon: const Icon(Icons.add_photo_alternate),
               label: const Text('Add More'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.text,
-                side: const BorderSide(color: AppColors.border),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: widget.onEdit,
-              icon: const Icon(Icons.tune),
-              label: const Text('Edit'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppColors.text,
                 side: const BorderSide(color: AppColors.border),

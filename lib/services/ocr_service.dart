@@ -1,45 +1,34 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 class OcrService {
+  final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
+
   Future<OcrResult> processImage(File imageFile) async {
     try {
-      // Simulate OCR processing with image enhancement
-      final enhancedImage = await _enhanceImage(imageFile);
+      final inputImage = InputImage.fromFile(imageFile);
+      final recognizedText = await _textRecognizer.processImage(inputImage);
+      final text = _fixCommonWords(
+        _correctOcrErrors(recognizedText.text.trim()),
+      );
 
-      // For simulator - return placeholder
-      // On real device, this would use ML Kit
-      await Future.delayed(const Duration(seconds: 1));
+      final blocks = recognizedText.blocks
+          .map((block) {
+            return TextBlock(
+              text: block.text,
+              lines: block.lines
+                  .map((line) => line.text)
+                  .toList(growable: false),
+            );
+          })
+          .toList(growable: false);
 
-      return OcrResult(success: true, text: _getSampleText(), blocks: []);
+      return OcrResult(success: true, text: text, blocks: blocks);
     } catch (e) {
       return OcrResult(success: false, text: '', error: e.toString());
     }
-  }
-
-  Future<File> _enhanceImage(File imageFile) async {
-    return imageFile;
-  }
-
-  String _getSampleText() {
-    return '''Document Scan Result
-
-This is a sample text extracted from your scanned document.
-
-The OCR (Optical Character Recognition) feature extracts text from scanned images. On a physical device, this will show the actual text detected in your document.
-
-To use OCR on a real device:
-1. Scan or import a document
-2. Go to "Text (OCR)" tab  
-3. Tap "Extract Text" button
-
-The extracted text can be edited and corrected if needed.
-
-Note: OCR accuracy depends on:
-- Image quality
-- Lighting conditions
-- Text clarity
-- Document orientation''';
   }
 
   String _correctOcrErrors(String text) {
@@ -65,7 +54,9 @@ Note: OCR accuracy depends on:
     return fixed;
   }
 
-  void dispose() {}
+  void dispose() {
+    _textRecognizer.close();
+  }
 }
 
 class OcrResult {
