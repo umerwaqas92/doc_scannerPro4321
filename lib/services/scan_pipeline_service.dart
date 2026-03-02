@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:image/image.dart' as img;
 import '../models/scan_pipeline_models.dart';
 import 'document_scanner_service.dart';
@@ -161,67 +162,113 @@ class ScanPipelineService {
     final decoded = img.decodeImage(bytes);
     if (decoded == null) return file;
 
-    final gray = img.grayscale(decoded);
+    // Analyze on a downscaled image for much faster auto-crop.
+    final maxAnalysisDim = 1200;
+    final maxDim = math.max(decoded.width, decoded.height);
+    img.Image analysis = decoded;
+    if (maxDim > maxAnalysisDim) {
+      final ratio = maxAnalysisDim / maxDim;
+      analysis = img.copyResize(
+        decoded,
+        width: (decoded.width * ratio).round(),
+        height: (decoded.height * ratio).round(),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+
+    final gray = img.grayscale(analysis);
     final width = gray.width;
     final height = gray.height;
-    final minPixels = (height * 0.08).round().clamp(1, height);
+
+    double sum = 0;
+    int samples = 0;
+    final probeStep = (width ~/ 140).clamp(1, 8);
+    for (int y = 0; y < height; y += probeStep) {
+      for (int x = 0; x < width; x += probeStep) {
+        sum += gray.getPixel(x, y).r;
+        samples++;
+      }
+    }
+    final mean = samples == 0 ? 220.0 : sum / samples;
+    final contentThreshold = (mean - 18).clamp(165.0, 238.0);
+
+    final minColPixels = (height * 0.04).round().clamp(2, height);
+    final minRowPixels = (width * 0.04).round().clamp(2, width);
 
     int left = 0;
     int right = width - 1;
     int top = 0;
     int bottom = height - 1;
 
-    bool hasInkInColumn(int x) {
+    bool hasContentInColumn(int x) {
       int count = 0;
       for (int y = 0; y < height; y++) {
-        if (gray.getPixel(x, y).r < 242) count++;
+        final value = gray.getPixel(x, y).r;
+        if (value < contentThreshold && value > 8) {
+          count++;
+          if (count >= minColPixels) return true;
+        }
       }
-      return count >= minPixels;
+      return false;
     }
 
-    bool hasInkInRow(int y) {
+    bool hasContentInRow(int y) {
       int count = 0;
       for (int x = 0; x < width; x++) {
-        if (gray.getPixel(x, y).r < 242) count++;
+        final value = gray.getPixel(x, y).r;
+        if (value < contentThreshold && value > 8) {
+          count++;
+          if (count >= minRowPixels) return true;
+        }
       }
-      return count >= (width * 0.08).round().clamp(1, width);
+      return false;
     }
 
-    while (left < right && !hasInkInColumn(left)) {
+    while (left < right && !hasContentInColumn(left)) {
       left++;
     }
-    while (right > left && !hasInkInColumn(right)) {
+    while (right > left && !hasContentInColumn(right)) {
       right--;
     }
-    while (top < bottom && !hasInkInRow(top)) {
+    while (top < bottom && !hasContentInRow(top)) {
       top++;
     }
-    while (bottom > top && !hasInkInRow(bottom)) {
+    while (bottom > top && !hasContentInRow(bottom)) {
       bottom--;
     }
 
-    // Keep a small safety margin so auto-crop does not clip text near edges.
-    left = (left - (width * 0.015).round()).clamp(0, width - 1);
-    right = (right + (width * 0.015).round()).clamp(0, width - 1);
-    top = (top - (height * 0.015).round()).clamp(0, height - 1);
-    bottom = (bottom + (height * 0.015).round()).clamp(0, height - 1);
+    final scaleX = decoded.width / width;
+    final scaleY = decoded.height / height;
+    int mappedLeft = (left * scaleX).round();
+    int mappedRight = (right * scaleX).round();
+    int mappedTop = (top * scaleY).round();
+    int mappedBottom = (bottom * scaleY).round();
 
-    final cropWidth = right - left + 1;
-    final cropHeight = bottom - top + 1;
-    final enoughArea = cropWidth > width * 0.6 && cropHeight > height * 0.6;
+    // Keep a safety margin so auto-crop does not trim text near edges.
+    final marginX = (decoded.width * 0.02).round();
+    final marginY = (decoded.height * 0.02).round();
+    mappedLeft = (mappedLeft - marginX).clamp(0, decoded.width - 1);
+    mappedRight = (mappedRight + marginX).clamp(0, decoded.width - 1);
+    mappedTop = (mappedTop - marginY).clamp(0, decoded.height - 1);
+    mappedBottom = (mappedBottom + marginY).clamp(0, decoded.height - 1);
+
+    final cropWidth = mappedRight - mappedLeft + 1;
+    final cropHeight = mappedBottom - mappedTop + 1;
+    final enoughArea =
+        cropWidth > decoded.width * 0.62 && cropHeight > decoded.height * 0.62;
 
     final result = enoughArea
         ? img.copyCrop(
             decoded,
-            x: left,
-            y: top,
+            x: mappedLeft,
+            y: mappedTop,
             width: cropWidth,
             height: cropHeight,
           )
         : decoded;
 
     final output = File(_buildDerivedPath(file.path, 'cropped'));
-    await output.writeAsBytes(img.encodeJpg(result, quality: 95));
+    await output.writeAsBytes(img.encodeJpg(result, quality: 90));
     return output;
   }
 
@@ -237,34 +284,48 @@ class ScanPipelineService {
     final variants = <DocumentFilterMode, File>{};
     variants[DocumentFilterMode.original] = source;
 
-    final grayscale = img.grayscale(decoded);
+    // Build enhancement variants from a resized working copy for speed.
+    img.Image working = decoded;
+    final maxVariantDim = 1500;
+    final maxDim = math.max(decoded.width, decoded.height);
+    if (maxDim > maxVariantDim) {
+      final ratio = maxVariantDim / maxDim;
+      working = img.copyResize(
+        decoded,
+        width: (decoded.width * ratio).round(),
+        height: (decoded.height * ratio).round(),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+
+    final grayscale = img.grayscale(working);
     final grayscaleFile = File(_buildDerivedPath(source.path, 'grayscale'));
-    await grayscaleFile.writeAsBytes(img.encodeJpg(grayscale, quality: 95));
+    await grayscaleFile.writeAsBytes(img.encodeJpg(grayscale, quality: 88));
     variants[DocumentFilterMode.grayscale] = grayscaleFile;
 
     final bw = _toStrongBlackWhite(grayscale);
     final bwFile = File(_buildDerivedPath(source.path, 'bw'));
-    await bwFile.writeAsBytes(img.encodeJpg(bw, quality: 95));
+    await bwFile.writeAsBytes(img.encodeJpg(bw, quality: 88));
     variants[DocumentFilterMode.blackWhite] = bwFile;
 
-    final colorEnhanced = _enhanceColorDocument(decoded);
+    final colorEnhanced = _enhanceColorDocument(working);
     final colorFile = File(_buildDerivedPath(source.path, 'color_plus'));
-    await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 95));
+    await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 88));
     variants[DocumentFilterMode.colorEnhanced] = colorFile;
 
-    final textPlus = _highContrastText(decoded);
+    final textPlus = _highContrastText(working);
     final textPlusFile = File(_buildDerivedPath(source.path, 'text_plus'));
-    await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 95));
+    await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 88));
     variants[DocumentFilterMode.highContrastText] = textPlusFile;
 
-    final warm = _warmPaper(decoded);
+    final warm = _warmPaper(working);
     final warmFile = File(_buildDerivedPath(source.path, 'warm_paper'));
-    await warmFile.writeAsBytes(img.encodeJpg(warm, quality: 95));
+    await warmFile.writeAsBytes(img.encodeJpg(warm, quality: 88));
     variants[DocumentFilterMode.warmPaper] = warmFile;
 
-    final photo = _photoNatural(decoded);
+    final photo = _photoNatural(working);
     final photoFile = File(_buildDerivedPath(source.path, 'photo_natural'));
-    await photoFile.writeAsBytes(img.encodeJpg(photo, quality: 95));
+    await photoFile.writeAsBytes(img.encodeJpg(photo, quality: 88));
     variants[DocumentFilterMode.photoNatural] = photoFile;
 
     return variants;

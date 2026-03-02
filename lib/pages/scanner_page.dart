@@ -33,25 +33,26 @@ class ScannerPage extends StatefulWidget {
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScannerPageState extends State<ScannerPage>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _analyzerController;
-
+class _ScannerPageState extends State<ScannerPage> {
   bool _isStable = false;
   bool _isCaptureActionPending = false;
   bool _isStreamRunning = false;
   bool _isStartingStream = false;
   bool _isFrameProcessing = false;
   bool _liveAnalyzerAvailable = true;
-  bool _autoCaptureEnabled = true;
+  bool _autoCaptureEnabled = false;
   bool _autoCapturedSinceUnstable = false;
+  bool _awaitingDocumentMoveAfterAutoCapture = false;
+  bool _isAdjustingFocus = false;
 
   int _frameTick = 0;
   int _stableFrameCount = 0;
+  int _missingDocumentFrames = 0;
 
   double _detectionConfidence = 0.0;
   String _liveStatus = 'Searching for document...';
   DateTime _lastAutoCaptureAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastFocusAdjustAt = DateTime.fromMillisecondsSinceEpoch(0);
   CameraController? _streamController;
 
   bool get _isBusy => _isCaptureActionPending || widget.isAnalyzing;
@@ -59,10 +60,6 @@ class _ScannerPageState extends State<ScannerPage>
   @override
   void initState() {
     super.initState();
-    _analyzerController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1800),
-    )..repeat();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_startLiveAnalyzerIfPossible());
     });
@@ -91,6 +88,7 @@ class _ScannerPageState extends State<ScannerPage>
       _isStable = false;
       _liveStatus = 'Searching for document...';
       _detectionConfidence = 0;
+      _missingDocumentFrames = 0;
       if (mounted) {
         setState(() {});
       }
@@ -100,7 +98,6 @@ class _ScannerPageState extends State<ScannerPage>
   @override
   void dispose() {
     unawaited(_stopLiveAnalyzer());
-    _analyzerController.dispose();
     super.dispose();
   }
 
@@ -111,6 +108,8 @@ class _ScannerPageState extends State<ScannerPage>
     _detectionConfidence = 0;
     _liveStatus = 'Searching for document...';
     _autoCapturedSinceUnstable = false;
+    _awaitingDocumentMoveAfterAutoCapture = false;
+    _missingDocumentFrames = 0;
   }
 
   Future<void> _restartLiveAnalyzer() async {
@@ -189,28 +188,71 @@ class _ScannerPageState extends State<ScannerPage>
     _isFrameProcessing = true;
     try {
       final stats = _analyzeFrame(image);
+      if (stats.occluded) {
+        _stableFrameCount = 0;
+        _isStable = false;
+        _detectionConfidence = 0;
+        _liveStatus = 'Camera blocked. Try again.';
+        _autoCapturedSinceUnstable = false;
+        _awaitingDocumentMoveAfterAutoCapture = false;
+        _missingDocumentFrames++;
+        if (mounted && _frameTick % 6 == 0) {
+          setState(() {});
+        }
+        return;
+      }
+
       final confidence = stats.confidence.clamp(0.0, 1.0);
       final candidate = stats.candidate;
+      if (candidate) {
+        _missingDocumentFrames = 0;
+      } else {
+        _missingDocumentFrames = math.min(_missingDocumentFrames + 1, 1000);
+      }
 
       final previousStable = _isStable;
-      if (candidate && confidence > 0.42) {
+      if (candidate && confidence > 0.45) {
         _stableFrameCount = math.min(_stableFrameCount + 1, 36);
       } else {
         _stableFrameCount = math.max(_stableFrameCount - 2, 0);
       }
 
-      final stableNow = _stableFrameCount >= 8;
-      if (!stableNow) {
+      final stableNow = _stableFrameCount >= 10;
+
+      // Require document movement after an auto-capture before next auto shot.
+      if (_awaitingDocumentMoveAfterAutoCapture &&
+          _missingDocumentFrames >= 8) {
+        _awaitingDocumentMoveAfterAutoCapture = false;
+        _autoCapturedSinceUnstable = false;
+      }
+      if (!stableNow && !_awaitingDocumentMoveAfterAutoCapture) {
         _autoCapturedSinceUnstable = false;
       }
 
       String status;
-      if (stableNow) {
-        status = 'Document locked';
+      if (_awaitingDocumentMoveAfterAutoCapture) {
+        status = 'Move to next page for auto capture';
+      } else if (stableNow) {
+        if (_autoCaptureEnabled) {
+          status = 'Perfect shot ready';
+        } else {
+          status = 'Document locked';
+        }
       } else if (candidate) {
-        status = 'Hold steady...';
+        if (_autoCaptureEnabled) {
+          status = 'Focusing... hold steady';
+        } else {
+          status = 'Hold steady...';
+        }
       } else {
         status = 'Searching for document...';
+      }
+
+      if (_autoCaptureEnabled &&
+          candidate &&
+          confidence >= 0.50 &&
+          _frameTick % 8 == 0) {
+        unawaited(_maybeRefocusCenter());
       }
 
       final shouldRebuild = stableNow != previousStable || _frameTick % 6 == 0;
@@ -228,12 +270,16 @@ class _ScannerPageState extends State<ScannerPage>
 
       if (_autoCaptureEnabled &&
           stableNow &&
+          _stableFrameCount >= 12 &&
+          confidence >= 0.62 &&
           !_autoCapturedSinceUnstable &&
+          !_awaitingDocumentMoveAfterAutoCapture &&
           !_isBusy) {
         final now = DateTime.now();
         final elapsed = now.difference(_lastAutoCaptureAt).inMilliseconds;
-        if (elapsed > 2400) {
+        if (elapsed > 1800) {
           _autoCapturedSinceUnstable = true;
+          _awaitingDocumentMoveAfterAutoCapture = true;
           _lastAutoCaptureAt = now;
           unawaited(_onCapture(autoTriggered: true));
         }
@@ -242,6 +288,27 @@ class _ScannerPageState extends State<ScannerPage>
       // keep scanner responsive even if one frame fails.
     } finally {
       _isFrameProcessing = false;
+    }
+  }
+
+  Future<void> _maybeRefocusCenter() async {
+    if (_isAdjustingFocus || !_autoCaptureEnabled || _isBusy) return;
+    final now = DateTime.now();
+    if (now.difference(_lastFocusAdjustAt).inMilliseconds < 900) return;
+    final controller = _activeController();
+    if (controller == null) return;
+
+    _isAdjustingFocus = true;
+    _lastFocusAdjustAt = now;
+    try {
+      await controller.setFocusMode(FocusMode.auto);
+      await controller.setExposureMode(ExposureMode.auto);
+      await controller.setFocusPoint(const Offset(0.5, 0.5));
+      await controller.setExposurePoint(const Offset(0.5, 0.5));
+    } catch (_) {
+      // Ignore focus point failures on unsupported devices.
+    } finally {
+      _isAdjustingFocus = false;
     }
   }
 
@@ -319,13 +386,26 @@ class _ScannerPageState extends State<ScannerPage>
           1.0,
         );
 
-    final candidate =
-        edgeNorm > 0.075 &&
-        varianceNorm > 0.0055 &&
-        brightnessNorm > 0.16 &&
-        brightnessNorm < 0.97;
+    final occluded =
+        brightnessNorm < 0.09 ||
+        brightnessNorm > 0.985 ||
+        (varianceNorm < 0.0012 && edgeNorm < 0.04);
 
-    return _FrameStats(confidence: confidence, candidate: candidate);
+    if (occluded) {
+      return const _FrameStats(confidence: 0, candidate: false, occluded: true);
+    }
+
+    final candidate =
+        edgeNorm > 0.095 &&
+        varianceNorm > 0.008 &&
+        brightnessNorm > 0.20 &&
+        brightnessNorm < 0.95;
+
+    return _FrameStats(
+      confidence: confidence,
+      candidate: candidate,
+      occluded: false,
+    );
   }
 
   double _previewAspectRatio() {
@@ -520,100 +600,6 @@ class _ScannerPageState extends State<ScannerPage>
             ),
           ),
         ),
-        Center(
-          child: FractionallySizedBox(
-            widthFactor: 0.90,
-            heightFactor: 0.86,
-            child: AnimatedBuilder(
-              animation: _analyzerController,
-              builder: (context, child) {
-                final frameColor = _isStable
-                    ? AppColors.green
-                    : Colors.white.withValues(alpha: 0.72);
-                final pulse = 0.35 + (_analyzerController.value * 0.65);
-
-                return Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.30),
-                      width: 1.4,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: frameColor, width: 2),
-                        borderRadius: BorderRadius.circular(10),
-                        boxShadow: [
-                          BoxShadow(
-                            color: frameColor.withValues(alpha: pulse * 0.35),
-                            blurRadius: 10,
-                            spreadRadius: 1,
-                          ),
-                        ],
-                      ),
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final maxY = constraints.maxHeight - 24;
-                          final lineY = 12 + (maxY * _analyzerController.value);
-                          return Stack(
-                            children: [
-                              Positioned(
-                                top: -2,
-                                left: -2,
-                                child: _buildCorner(true, true, frameColor),
-                              ),
-                              Positioned(
-                                top: -2,
-                                right: -2,
-                                child: _buildCorner(true, false, frameColor),
-                              ),
-                              Positioned(
-                                bottom: -2,
-                                left: -2,
-                                child: _buildCorner(false, true, frameColor),
-                              ),
-                              Positioned(
-                                bottom: -2,
-                                right: -2,
-                                child: _buildCorner(false, false, frameColor),
-                              ),
-                              Positioned(
-                                left: 10,
-                                right: 10,
-                                top: lineY,
-                                child: Container(
-                                  height: 2,
-                                  decoration: BoxDecoration(
-                                    color: AppColors.green.withValues(
-                                      alpha: 0.9,
-                                    ),
-                                    borderRadius: BorderRadius.circular(2),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: AppColors.green.withValues(
-                                          alpha: 0.6,
-                                        ),
-                                        blurRadius: 8,
-                                        spreadRadius: 1,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
         Positioned(
           bottom: 14,
           left: 0,
@@ -623,7 +609,9 @@ class _ScannerPageState extends State<ScannerPage>
                 ? (_autoCaptureEnabled
                       ? 'Hold steady • auto-capture enabled'
                       : 'Hold steady and tap capture')
-                : 'Align page inside frame',
+                : (_autoCaptureEnabled
+                      ? 'Align page for perfect auto shot'
+                      : 'Tap capture anytime'),
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
@@ -633,29 +621,6 @@ class _ScannerPageState extends State<ScannerPage>
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildCorner(bool isTop, bool isLeft, Color color) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        border: Border(
-          top: isTop ? BorderSide(color: color, width: 3) : BorderSide.none,
-          bottom: !isTop ? BorderSide(color: color, width: 3) : BorderSide.none,
-          left: isLeft ? BorderSide(color: color, width: 3) : BorderSide.none,
-          right: !isLeft ? BorderSide(color: color, width: 3) : BorderSide.none,
-        ),
-        borderRadius: BorderRadius.only(
-          topLeft: isTop && isLeft ? const Radius.circular(4) : Radius.zero,
-          topRight: isTop && !isLeft ? const Radius.circular(4) : Radius.zero,
-          bottomLeft: !isTop && isLeft ? const Radius.circular(4) : Radius.zero,
-          bottomRight: !isTop && !isLeft
-              ? const Radius.circular(4)
-              : Radius.zero,
-        ),
-      ),
     );
   }
 
@@ -771,6 +736,9 @@ class _ScannerPageState extends State<ScannerPage>
   void _toggleAutoCapture() {
     setState(() {
       _autoCaptureEnabled = !_autoCaptureEnabled;
+      _awaitingDocumentMoveAfterAutoCapture = false;
+      _autoCapturedSinceUnstable = false;
+      _missingDocumentFrames = 0;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -786,11 +754,17 @@ class _ScannerPageState extends State<ScannerPage>
 
   Future<void> _onCapture({required bool autoTriggered}) async {
     if (_isBusy) return;
+    final beforeCount = widget.capturedImages.length;
 
-    if (_liveAnalyzerAvailable && !_isStable && !autoTriggered) {
+    final manualAutoModeBlocked =
+        _autoCaptureEnabled &&
+        _liveAnalyzerAvailable &&
+        !_isStable &&
+        !autoTriggered;
+    if (manualAutoModeBlocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No clear page detected. Try again.'),
+          content: Text('Auto mode: wait for perfect shot or disable Auto'),
           duration: Duration(seconds: 2),
         ),
       );
@@ -813,12 +787,19 @@ class _ScannerPageState extends State<ScannerPage>
       await widget.onCapture();
     } finally {
       if (mounted) {
+        final capturedAdded = widget.capturedImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
           _liveStatus = 'Searching for document...';
+          if (autoTriggered && capturedAdded) {
+            _autoCapturedSinceUnstable = true;
+          }
         });
         if (!widget.isAnalyzing) {
           unawaited(_startLiveAnalyzerIfPossible());
+        }
+        if (autoTriggered && capturedAdded) {
+          _awaitingDocumentMoveAfterAutoCapture = true;
         }
       }
     }
@@ -914,6 +895,11 @@ class _ScannerPageState extends State<ScannerPage>
 class _FrameStats {
   final double confidence;
   final bool candidate;
+  final bool occluded;
 
-  const _FrameStats({required this.confidence, required this.candidate});
+  const _FrameStats({
+    required this.confidence,
+    required this.candidate,
+    this.occluded = false,
+  });
 }

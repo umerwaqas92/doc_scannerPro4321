@@ -103,6 +103,10 @@ class AppState extends ChangeNotifier {
     try {
       final result = await _scanPipelineService.run(
         image,
+        options: const ScanPipelineOptions(
+          maxDimension: 1300,
+          minConfidence: 0.40,
+        ),
         onStage: (stage, message) {
           _analysisStageText = message;
           notifyListeners();
