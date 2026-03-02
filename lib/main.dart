@@ -128,16 +128,16 @@ class _MainScreenState extends State<MainScreen> {
         ? appState.pipelineResults[index]
         : null;
 
-    final invalidDocument =
-        pipeline == null ||
-        pipeline.detectionConfidence < 0.18 ||
-        (pipeline.usedFallback && pipeline.detectionConfidence < 0.34);
+    // Keep capture flow permissive: users can manually scan any page and fix in edit.
+    if (pipeline == null) return true;
 
-    if (!invalidDocument) return true;
-
-    appState.removeCapturedImage(index);
-    _showScannerError(errorMessage);
-    return false;
+    // Only show a soft warning for extremely weak detections; do not block.
+    final extremelyWeak =
+        pipeline.detectionConfidence < 0.05 && pipeline.usedFallback;
+    if (extremelyWeak) {
+      _showScannerError('Image may be unclear. You can adjust it in Edit.');
+    }
+    return true;
   }
 
   Future<void> _openEditFromScanner() async {
