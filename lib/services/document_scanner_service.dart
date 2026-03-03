@@ -1,13 +1,10 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
 class DocumentScannerService {
-  List<ScanPoint>? _detectedEdges;
-
   final StreamController<List<ScanPoint>> _edgesController =
       StreamController<List<ScanPoint>>.broadcast();
   Stream<List<ScanPoint>> get edgesStream => _edgesController.stream;
@@ -244,10 +241,650 @@ class DocumentScannerService {
     }
   }
 
+  Future<File?> postProcessWarpedDocument(
+    File imageFile, {
+    String suffix = 'crop_clean',
+    int quality = 94,
+  }) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return imageFile;
+
+      final cleaned = cleanupDocumentBoundaries(decoded);
+      final outputPath = _buildDerivedPath(imageFile.path, suffix);
+      final outputFile = File(outputPath);
+      await outputFile.writeAsBytes(img.encodeJpg(cleaned, quality: quality));
+      return outputFile;
+    } catch (e) {
+      debugPrint('Error cleaning warped document: $e');
+      return imageFile;
+    }
+  }
+
+  img.Image cleanupDocumentBoundaries(img.Image source) {
+    if (source.width < 32 || source.height < 32) return source;
+
+    final whiteTrimmed = _trimNearWhiteBorder(source);
+    final colorTrimmed = _trimColorfulBorders(whiteTrimmed);
+
+    img.Image cropped = colorTrimmed;
+    final bounds = _detectDocumentBounds(colorTrimmed);
+    if (bounds != null) {
+      final candidate = _cropFromBounds(colorTrimmed, bounds);
+      if (_isCropReasonable(
+        colorTrimmed,
+        candidate,
+        minAreaRatio: 0.24,
+        minWidthRatio: 0.45,
+        minHeightRatio: 0.45,
+      )) {
+        cropped = candidate;
+      }
+    }
+
+    final ringTrimmed = _trimNoisyOuterRing(cropped);
+    final changedSize =
+        ringTrimmed.width != cropped.width ||
+        ringTrimmed.height != cropped.height;
+    if (changedSize &&
+        _isCropReasonable(
+          cropped,
+          ringTrimmed,
+          minAreaRatio: 0.72,
+          minWidthRatio: 0.82,
+          minHeightRatio: 0.82,
+        )) {
+      return ringTrimmed;
+    }
+    return cropped;
+  }
+
   String _buildDerivedPath(String originalPath, String suffix) {
     final dot = originalPath.lastIndexOf('.');
     if (dot == -1) return '${originalPath}_$suffix.jpg';
     return '${originalPath.substring(0, dot)}_$suffix${originalPath.substring(dot)}';
+  }
+
+  img.Image _trimNearWhiteBorder(img.Image source) {
+    final width = source.width;
+    final height = source.height;
+    if (width < 30 || height < 30) return source;
+
+    final maxTrimX = (width * 0.14).round();
+    final maxTrimY = (height * 0.14).round();
+    final minDarkInCol = (height * 0.01).round().clamp(2, height);
+    final minDarkInRow = (width * 0.01).round().clamp(2, width);
+
+    bool looksWhiteColumn(int x) {
+      int dark = 0;
+      for (int y = 0; y < height; y++) {
+        final luma = source.getPixel(x, y).luminance;
+        if (luma < 236) {
+          dark++;
+          if (dark >= minDarkInCol) return false;
+        }
+      }
+      return true;
+    }
+
+    bool looksWhiteRow(int y) {
+      int dark = 0;
+      for (int x = 0; x < width; x++) {
+        final luma = source.getPixel(x, y).luminance;
+        if (luma < 236) {
+          dark++;
+          if (dark >= minDarkInRow) return false;
+        }
+      }
+      return true;
+    }
+
+    int left = 0;
+    int right = width - 1;
+    int top = 0;
+    int bottom = height - 1;
+
+    while (left < right && left < maxTrimX && looksWhiteColumn(left)) {
+      left++;
+    }
+    while (right > left &&
+        (width - 1 - right) < maxTrimX &&
+        looksWhiteColumn(right)) {
+      right--;
+    }
+    while (top < bottom && top < maxTrimY && looksWhiteRow(top)) {
+      top++;
+    }
+    while (bottom > top &&
+        (height - 1 - bottom) < maxTrimY &&
+        looksWhiteRow(bottom)) {
+      bottom--;
+    }
+
+    final trimmedWidth = right - left + 1;
+    final trimmedHeight = bottom - top + 1;
+    if (trimmedWidth <= width * 0.6 || trimmedHeight <= height * 0.6) {
+      return source;
+    }
+
+    return img.copyCrop(
+      source,
+      x: left,
+      y: top,
+      width: trimmedWidth,
+      height: trimmedHeight,
+    );
+  }
+
+  img.Image _trimColorfulBorders(img.Image source) {
+    final width = source.width;
+    final height = source.height;
+    if (width < 36 || height < 36) return source;
+
+    final maxTrimX = (width * 0.28).round();
+    final maxTrimY = (height * 0.28).round();
+    final sampleStep = (math.min(width, height) ~/ 300).clamp(1, 4);
+
+    bool looksColorfulColumn(int x) {
+      int total = 0;
+      int colorful = 0;
+      for (int y = 0; y < height; y += sampleStep) {
+        final p = source.getPixel(x, y);
+        final maxRgb = math.max(p.r, math.max(p.g, p.b));
+        final minRgb = math.min(p.r, math.min(p.g, p.b));
+        final sat = maxRgb <= 0 ? 0.0 : (maxRgb - minRgb) / maxRgb;
+        final luma = p.luminance;
+        if (luma > 24 && sat > 0.16) {
+          colorful++;
+        }
+        total++;
+      }
+      if (total == 0) return false;
+      return (colorful / total) > 0.11;
+    }
+
+    bool looksColorfulRow(int y) {
+      int total = 0;
+      int colorful = 0;
+      for (int x = 0; x < width; x += sampleStep) {
+        final p = source.getPixel(x, y);
+        final maxRgb = math.max(p.r, math.max(p.g, p.b));
+        final minRgb = math.min(p.r, math.min(p.g, p.b));
+        final sat = maxRgb <= 0 ? 0.0 : (maxRgb - minRgb) / maxRgb;
+        final luma = p.luminance;
+        if (luma > 24 && sat > 0.16) {
+          colorful++;
+        }
+        total++;
+      }
+      if (total == 0) return false;
+      return (colorful / total) > 0.11;
+    }
+
+    int left = 0;
+    int right = width - 1;
+    int top = 0;
+    int bottom = height - 1;
+
+    while (left < right && left < maxTrimX && looksColorfulColumn(left)) {
+      left++;
+    }
+    while (right > left &&
+        (width - 1 - right) < maxTrimX &&
+        looksColorfulColumn(right)) {
+      right--;
+    }
+    while (top < bottom && top < maxTrimY && looksColorfulRow(top)) {
+      top++;
+    }
+    while (bottom > top &&
+        (height - 1 - bottom) < maxTrimY &&
+        looksColorfulRow(bottom)) {
+      bottom--;
+    }
+
+    final cropWidth = right - left + 1;
+    final cropHeight = bottom - top + 1;
+    if (cropWidth <= width * 0.58 || cropHeight <= height * 0.58) {
+      return source;
+    }
+
+    return img.copyCrop(
+      source,
+      x: left,
+      y: top,
+      width: cropWidth,
+      height: cropHeight,
+    );
+  }
+
+  _CropBounds? _detectDocumentBounds(img.Image source) {
+    final srcW = source.width;
+    final srcH = source.height;
+    if (srcW < 40 || srcH < 40) return null;
+
+    final maxAnalysisDim = 1000;
+    final maxDim = math.max(srcW, srcH);
+    img.Image analysis = source;
+    if (maxDim > maxAnalysisDim) {
+      final ratio = maxAnalysisDim / maxDim;
+      analysis = img.copyResize(
+        source,
+        width: (srcW * ratio).round(),
+        height: (srcH * ratio).round(),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+
+    final width = analysis.width;
+    final height = analysis.height;
+    final total = width * height;
+    if (total < 1) return null;
+
+    final luminance = Uint8List(total);
+    final saturation = Float64List(total);
+    int idx = 0;
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final p = analysis.getPixel(x, y);
+        final maxRgb = math.max(p.r, math.max(p.g, p.b));
+        final minRgb = math.min(p.r, math.min(p.g, p.b));
+        saturation[idx] = maxRgb <= 0 ? 0.0 : (maxRgb - minRgb) / maxRgb;
+        luminance[idx] = p.luminance.toInt().clamp(0, 255);
+        idx++;
+      }
+    }
+
+    var mask = _buildAdaptivePaperMask(luminance, saturation, width, height);
+    mask = _dilateMask(mask, width, height, iterations: 1, minNeighbors: 2);
+    mask = _erodeMask(mask, width, height, iterations: 1, minNeighbors: 5);
+    mask = _erodeMask(mask, width, height, iterations: 1, minNeighbors: 4);
+    mask = _dilateMask(mask, width, height, iterations: 1, minNeighbors: 2);
+
+    final candidate = _findBestPaperComponent(
+      mask,
+      luminance,
+      saturation,
+      width,
+      height,
+    );
+    if (candidate == null) return null;
+    if (candidate.score < 0.34) return null;
+
+    final scaleX = srcW / width;
+    final scaleY = srcH / height;
+    int left = (candidate.left * scaleX).floor();
+    int top = (candidate.top * scaleY).floor();
+    int right = ((candidate.right + 1) * scaleX).ceil() - 1;
+    int bottom = ((candidate.bottom + 1) * scaleY).ceil() - 1;
+
+    final padX = math.max(1, (srcW * 0.004).round());
+    final padY = math.max(1, (srcH * 0.004).round());
+    left = (left - padX).clamp(0, srcW - 1);
+    top = (top - padY).clamp(0, srcH - 1);
+    right = (right + padX).clamp(0, srcW - 1);
+    bottom = (bottom + padY).clamp(0, srcH - 1);
+
+    return _CropBounds(
+      left: left,
+      top: top,
+      right: right,
+      bottom: bottom,
+      score: candidate.score,
+    );
+  }
+
+  Uint8List _buildAdaptivePaperMask(
+    Uint8List luminance,
+    Float64List saturation,
+    int width,
+    int height,
+  ) {
+    final integral = Float64List((width + 1) * (height + 1));
+    for (int y = 1; y <= height; y++) {
+      double rowSum = 0;
+      for (int x = 1; x <= width; x++) {
+        final idx = (y - 1) * width + (x - 1);
+        rowSum += luminance[idx];
+        integral[y * (width + 1) + x] =
+            integral[(y - 1) * (width + 1) + x] + rowSum;
+      }
+    }
+
+    final radius = (math.min(width, height) / 18).round().clamp(14, 44);
+    final mask = Uint8List(width * height);
+
+    for (int y = 0; y < height; y++) {
+      final y0 = math.max(0, y - radius);
+      final y1 = math.min(height - 1, y + radius);
+      for (int x = 0; x < width; x++) {
+        final x0 = math.max(0, x - radius);
+        final x1 = math.min(width - 1, x + radius);
+
+        final sum =
+            integral[(y1 + 1) * (width + 1) + (x1 + 1)] -
+            integral[y0 * (width + 1) + (x1 + 1)] -
+            integral[(y1 + 1) * (width + 1) + x0] +
+            integral[y0 * (width + 1) + x0];
+        final area = (x1 - x0 + 1) * (y1 - y0 + 1);
+        final localMean = sum / area;
+
+        final idx = y * width + x;
+        final lum = luminance[idx].toDouble();
+        final sat = saturation[idx];
+        final brightPaper =
+            lum >= (localMean - 10) && lum >= 105 && sat <= 0.58;
+        final veryBright = lum >= (localMean + 6) && sat <= 0.72;
+        final flatLight = lum >= 194 && sat <= 0.80;
+
+        if (brightPaper || veryBright || flatLight) {
+          mask[idx] = 1;
+        }
+      }
+    }
+    return mask;
+  }
+
+  Uint8List _dilateMask(
+    Uint8List mask,
+    int width,
+    int height, {
+    int iterations = 1,
+    int minNeighbors = 2,
+  }) {
+    var current = mask;
+    for (int i = 0; i < iterations; i++) {
+      final output = Uint8List(current.length);
+      for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+          final idx = y * width + x;
+          if (current[idx] == 1) {
+            output[idx] = 1;
+            continue;
+          }
+          int neighbors = 0;
+          for (int ny = y - 1; ny <= y + 1; ny++) {
+            for (int nx = x - 1; nx <= x + 1; nx++) {
+              if (current[ny * width + nx] == 1) {
+                neighbors++;
+              }
+            }
+          }
+          if (neighbors >= minNeighbors) {
+            output[idx] = 1;
+          }
+        }
+      }
+      current = output;
+    }
+    return current;
+  }
+
+  Uint8List _erodeMask(
+    Uint8List mask,
+    int width,
+    int height, {
+    int iterations = 1,
+    int minNeighbors = 5,
+  }) {
+    var current = mask;
+    for (int i = 0; i < iterations; i++) {
+      final output = Uint8List(current.length);
+      for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+          final idx = y * width + x;
+          if (current[idx] == 0) continue;
+          int neighbors = 0;
+          for (int ny = y - 1; ny <= y + 1; ny++) {
+            for (int nx = x - 1; nx <= x + 1; nx++) {
+              if (current[ny * width + nx] == 1) {
+                neighbors++;
+              }
+            }
+          }
+          if (neighbors >= minNeighbors) {
+            output[idx] = 1;
+          }
+        }
+      }
+      current = output;
+    }
+    return current;
+  }
+
+  _CropBounds? _findBestPaperComponent(
+    Uint8List mask,
+    Uint8List luminance,
+    Float64List saturation,
+    int width,
+    int height,
+  ) {
+    final total = width * height;
+    final visited = Uint8List(total);
+    final queue = List<int>.filled(total, 0, growable: false);
+    _CropBounds? best;
+
+    for (int start = 0; start < total; start++) {
+      if (mask[start] == 0 || visited[start] == 1) continue;
+
+      int head = 0;
+      int tail = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      int count = 0;
+      int minX = width;
+      int maxX = 0;
+      int minY = height;
+      int maxY = 0;
+      double sumLum = 0;
+      double sumSat = 0;
+
+      while (head < tail) {
+        final idx = queue[head++];
+        final x = idx % width;
+        final y = idx ~/ width;
+        count++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        sumLum += luminance[idx];
+        sumSat += saturation[idx];
+
+        for (int ny = y - 1; ny <= y + 1; ny++) {
+          if (ny < 0 || ny >= height) continue;
+          for (int nx = x - 1; nx <= x + 1; nx++) {
+            if (nx < 0 || nx >= width) continue;
+            final nIdx = ny * width + nx;
+            if (mask[nIdx] == 0 || visited[nIdx] == 1) continue;
+            visited[nIdx] = 1;
+            queue[tail++] = nIdx;
+          }
+        }
+      }
+
+      final bboxW = maxX - minX + 1;
+      final bboxH = maxY - minY + 1;
+      final bboxArea = math.max(1, bboxW * bboxH);
+      final areaRatio = count / total;
+      final fillRatio = count / bboxArea;
+      final widthRatio = bboxW / width;
+      final heightRatio = bboxH / height;
+      if (areaRatio < 0.08 ||
+          fillRatio < 0.22 ||
+          widthRatio < 0.35 ||
+          heightRatio < 0.35 ||
+          areaRatio > 0.96) {
+        continue;
+      }
+
+      final centerX = (minX + maxX) / 2;
+      final centerY = (minY + maxY) / 2;
+      final dx = centerX - (width / 2);
+      final dy = centerY - (height / 2);
+      final maxDist = math.sqrt(
+        (width / 2) * (width / 2) + (height / 2) * (height / 2),
+      );
+      final centerScore = (1.0 - math.sqrt(dx * dx + dy * dy) / maxDist).clamp(
+        0.0,
+        1.0,
+      );
+
+      final aspect = bboxW / bboxH;
+      final aspectScore = _aspectScore(aspect);
+      final avgLum = (sumLum / count) / 255.0;
+      final avgSat = (sumSat / count).clamp(0.0, 1.0);
+      final toneScore = (avgLum * 0.65 + (1 - avgSat) * 0.35).clamp(0.0, 1.0);
+
+      final touchesLeft = minX <= 2;
+      final touchesTop = minY <= 2;
+      final touchesRight = maxX >= width - 3;
+      final touchesBottom = maxY >= height - 3;
+      final borderTouches =
+          (touchesLeft ? 1 : 0) +
+          (touchesTop ? 1 : 0) +
+          (touchesRight ? 1 : 0) +
+          (touchesBottom ? 1 : 0);
+      if (borderTouches == 4 && fillRatio < 0.78) continue;
+
+      final borderPenalty = borderTouches >= 3 ? 0.23 : borderTouches * 0.055;
+      final score =
+          areaRatio * 0.40 +
+          fillRatio * 0.25 +
+          toneScore * 0.20 +
+          centerScore * 0.10 +
+          aspectScore * 0.05 -
+          borderPenalty;
+
+      if (best == null || score > best.score) {
+        best = _CropBounds(
+          left: minX,
+          top: minY,
+          right: maxX,
+          bottom: maxY,
+          score: score,
+        );
+      }
+    }
+
+    return best;
+  }
+
+  double _aspectScore(double aspect) {
+    const targets = [0.70, 1.00, 1.40];
+    double best = 0;
+    for (final t in targets) {
+      final diff = (aspect - t).abs() / t;
+      final score = (1.0 - diff).clamp(0.0, 1.0);
+      if (score > best) {
+        best = score;
+      }
+    }
+    return best;
+  }
+
+  img.Image _cropFromBounds(img.Image source, _CropBounds bounds) {
+    final left = bounds.left.clamp(0, source.width - 1);
+    final top = bounds.top.clamp(0, source.height - 1);
+    final right = bounds.right.clamp(left, source.width - 1);
+    final bottom = bounds.bottom.clamp(top, source.height - 1);
+    final cropWidth = right - left + 1;
+    final cropHeight = bottom - top + 1;
+    if (cropWidth < 10 || cropHeight < 10) return source;
+    return img.copyCrop(
+      source,
+      x: left,
+      y: top,
+      width: cropWidth,
+      height: cropHeight,
+    );
+  }
+
+  img.Image _trimNoisyOuterRing(img.Image source) {
+    if (source.width < 40 || source.height < 40) return source;
+    img.Image current = source;
+    final minAllowedWidth = (source.width * 0.58).round();
+    final minAllowedHeight = (source.height * 0.58).round();
+
+    for (int i = 0; i < 5; i++) {
+      if (!_outerRingLooksNoisy(current)) break;
+      final step = (math.min(current.width, current.height) * 0.01)
+          .round()
+          .clamp(1, 12);
+      if (current.width - (step * 2) < minAllowedWidth ||
+          current.height - (step * 2) < minAllowedHeight) {
+        break;
+      }
+      current = img.copyCrop(
+        current,
+        x: step,
+        y: step,
+        width: current.width - (step * 2),
+        height: current.height - (step * 2),
+      );
+    }
+    return current;
+  }
+
+  bool _outerRingLooksNoisy(img.Image image) {
+    final width = image.width;
+    final height = image.height;
+    final band = (math.min(width, height) * 0.03).round().clamp(2, 22);
+    final step = (math.min(width, height) ~/ 320).clamp(1, 4);
+
+    int sampled = 0;
+    int colorful = 0;
+    double sumLum = 0;
+    double sumLumSq = 0;
+
+    bool inRing(int x, int y) =>
+        x < band || y < band || x >= width - band || y >= height - band;
+
+    for (int y = 0; y < height; y += step) {
+      for (int x = 0; x < width; x += step) {
+        if (!inRing(x, y)) continue;
+        final p = image.getPixel(x, y);
+        final maxRgb = math.max(p.r, math.max(p.g, p.b));
+        final minRgb = math.min(p.r, math.min(p.g, p.b));
+        final sat = maxRgb <= 0 ? 0.0 : (maxRgb - minRgb) / maxRgb;
+        final lum = p.luminance;
+        if (lum > 22 && sat > 0.24) colorful++;
+        sumLum += lum;
+        sumLumSq += lum * lum;
+        sampled++;
+      }
+    }
+
+    if (sampled == 0) return false;
+    final colorfulRatio = colorful / sampled;
+    final mean = sumLum / sampled;
+    final variance = math.max(0.0, (sumLumSq / sampled) - (mean * mean));
+    return colorfulRatio > 0.13 || (colorfulRatio > 0.07 && variance > 1900);
+  }
+
+  bool _isCropReasonable(
+    img.Image original,
+    img.Image cropped, {
+    double minAreaRatio = 0.42,
+    double minWidthRatio = 0.55,
+    double minHeightRatio = 0.55,
+  }) {
+    if (cropped.width > original.width || cropped.height > original.height) {
+      return false;
+    }
+    if (cropped.width == original.width && cropped.height == original.height) {
+      return false;
+    }
+    final widthRatio = cropped.width / original.width;
+    final heightRatio = cropped.height / original.height;
+    final areaRatio =
+        (cropped.width * cropped.height) / (original.width * original.height);
+
+    return widthRatio >= minWidthRatio &&
+        heightRatio >= minHeightRatio &&
+        areaRatio >= minAreaRatio;
   }
 
   List<ScanPoint> _orderPerspectiveCorners(
@@ -372,7 +1009,6 @@ class DocumentScannerService {
   Future<List<ScanPoint>?> detectEdgesFromBytes(Uint8List bytes) async {
     try {
       final edges = await compute(_detectEdgesFromBytesInBackground, bytes);
-      _detectedEdges = edges;
 
       if (edges != null) {
         _edgesController.add(edges);
@@ -1303,7 +1939,9 @@ class DocumentScannerService {
         m[1] * (m[3] * m[8] - m[5] * m[6]) +
         m[2] * (m[3] * m[7] - m[4] * m[6]);
 
-    if (det.abs() < 0.0001) return m;
+    if (det.abs() < 0.0001) {
+      return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    }
 
     final invDet = 1.0 / det;
 
@@ -1452,6 +2090,22 @@ class DocumentScannerService {
   void dispose() {
     _edgesController.close();
   }
+}
+
+class _CropBounds {
+  final int left;
+  final int top;
+  final int right;
+  final int bottom;
+  final double score;
+
+  const _CropBounds({
+    required this.left,
+    required this.top,
+    required this.right,
+    required this.bottom,
+    required this.score,
+  });
 }
 
 class ScanPoint {

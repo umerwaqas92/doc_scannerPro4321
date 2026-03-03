@@ -681,11 +681,18 @@ class _ImageEditPageState extends State<ImageEditPage> {
         updatedCorners.map((c) => ScanPoint(c.x, c.y)).toList(growable: false),
         suffix: 'manual_warp',
       );
+      final cleaned = warped == null
+          ? null
+          : await _scannerService.postProcessWarpedDocument(
+              warped,
+              suffix: 'manual_clean',
+            );
+      final finalBase = cleaned ?? warped ?? source;
 
       if (!mounted) return;
 
       setState(() {
-        _manualPerspectiveBases[index] = warped;
+        _manualPerspectiveBases[index] = finalBase;
         _renderedOutputs[index] = null;
         _lastPreviewSignatures[index] = null;
         _sessions[index] = _sessions[index].copyWith(clearOutputFile: true);
