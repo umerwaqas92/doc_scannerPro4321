@@ -1,0 +1,143 @@
+import 'package:flutter/material.dart';
+import '../services/file_import_service.dart';
+import '../services/ocr_tool_service.dart';
+import '../theme/app_theme.dart';
+import 'ocr_tool_result_page.dart';
+
+class OcrToolInputPage extends StatefulWidget {
+  const OcrToolInputPage({super.key});
+
+  @override
+  State<OcrToolInputPage> createState() => _OcrToolInputPageState();
+}
+
+class _OcrToolInputPageState extends State<OcrToolInputPage> {
+  final FileImportService _importService = FileImportService();
+  final OcrToolService _ocrToolService = OcrToolService();
+
+  ImportedFile? _selected;
+  bool _analyzing = false;
+
+  @override
+  void dispose() {
+    _ocrToolService.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fileName = _selected?.file.path.split('/').last ?? 'None';
+    final fileType = _selected == null
+        ? 'No file selected'
+        : _selected!.type == ImportedFileType.pdf
+        ? 'PDF file'
+        : 'Image file';
+
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: AppBar(
+        backgroundColor: AppColors.bg,
+        title: const Text('OCR Text'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Select image or PDF',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    fileName,
+                    style: const TextStyle(color: AppColors.text2),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    fileType,
+                    style: const TextStyle(color: AppColors.text3),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _pickFile,
+                      icon: const Icon(Icons.attach_file),
+                      label: const Text('Choose File'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: (_selected == null || _analyzing) ? null : _analyze,
+                icon: _analyzing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.auto_awesome),
+                label: Text(_analyzing ? 'Analyzing...' : 'Analyze Text'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.text,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickFile() async {
+    final imported = await _importService.pickImageOrPdf();
+    if (imported == null) return;
+    setState(() => _selected = imported);
+  }
+
+  Future<void> _analyze() async {
+    final selected = _selected;
+    if (selected == null) return;
+
+    setState(() => _analyzing = true);
+    try {
+      final result = selected.type == ImportedFileType.pdf
+          ? await _ocrToolService.processPdf(selected.file)
+          : await _ocrToolService.processImage(selected.file);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => OcrToolResultPage(result: result)),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _analyzing = false);
+      }
+    }
+  }
+}

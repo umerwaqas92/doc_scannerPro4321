@@ -10,6 +10,7 @@ import '../services/settings_service.dart';
 import '../services/ocr_service.dart';
 import '../services/scan_pipeline_service.dart';
 import '../services/export_optimization_service.dart';
+import '../services/export_service.dart';
 
 class AppState extends ChangeNotifier {
   final StorageService _storageService = StorageService();
@@ -21,11 +22,13 @@ class AppState extends ChangeNotifier {
   final ScanPipelineService _scanPipelineService = ScanPipelineService();
   final ExportOptimizationService _exportOptimizationService =
       ExportOptimizationService();
+  final ExportService _exportService = ExportService();
 
   List<ScannedDocument> _documents = [];
   List<File> _capturedImages = [];
   List<ScanPipelineResult?> _pipelineResults = [];
   List<OcrResult> _ocrResults = [];
+  final Map<int, String> _editedOcrTexts = {};
   ScannedDocument? _selectedDocument;
   bool _isLoading = false;
   bool _isProcessingOcr = false;
@@ -58,6 +61,7 @@ class AppState extends ChangeNotifier {
   String get flashMode => _flashMode;
   String get defaultFormat => _defaultFormat;
   bool get cloudBackup => _cloudBackup;
+  String getEditedOcrText(int pageIndex) => _editedOcrTexts[pageIndex] ?? '';
 
   Future<void> initialize() async {
     _setLoading(true);
@@ -169,6 +173,7 @@ class AppState extends ChangeNotifier {
     _capturedImages.clear();
     _pipelineResults.clear();
     _ocrResults.clear();
+    _editedOcrTexts.clear();
     _activeAnalysisCount = 0;
     _analysisStageText = null;
     notifyListeners();
@@ -222,6 +227,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     _ocrResults.clear();
+    _editedOcrTexts.clear();
 
     for (var i = 0; i < _capturedImages.length; i++) {
       final variants = <File>[];
@@ -250,7 +256,30 @@ class AppState extends ChangeNotifier {
   }
 
   String getAllOcrText() {
-    return _ocrResults.map((r) => r.text).join('\n\n');
+    final lines = <String>[];
+    for (var i = 0; i < _ocrResults.length; i++) {
+      final edited = _editedOcrTexts[i];
+      final text = (edited != null && edited.trim().isNotEmpty)
+          ? edited
+          : _ocrResults[i].text;
+      if (text.trim().isNotEmpty) {
+        lines.add(text.trim());
+      }
+    }
+    return lines.join('\n\n');
+  }
+
+  void updateOcrTextForPage(int pageIndex, String text) {
+    if (pageIndex < 0) return;
+    if (text.trim().isEmpty) {
+      _editedOcrTexts.remove(pageIndex);
+    } else {
+      _editedOcrTexts[pageIndex] = text;
+    }
+    if (pageIndex < _ocrResults.length) {
+      _ocrResults[pageIndex] = _ocrResults[pageIndex].copyWith(text: text);
+    }
+    notifyListeners();
   }
 
   Future<ScannedDocument?> saveDocument(String name) async {
@@ -289,10 +318,106 @@ class AppState extends ChangeNotifier {
       _capturedImages.clear();
       _pipelineResults.clear();
       _ocrResults.clear();
+      _editedOcrTexts.clear();
       _setLoading(false);
       notifyListeners();
       return document;
     } catch (e) {
+      _setLoading(false);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<ScannedDocument?> createPdfFromImagesTool(
+    List<File> images, {
+    String name = 'PDF',
+  }) async {
+    if (images.isEmpty) return null;
+    _setLoading(true);
+    try {
+      final optimized = await _exportOptimizationService.compressBatch(
+        images,
+        quality: ExportQualityPreset.medium,
+      );
+      final fileName = '${name}_${DateTime.now().millisecondsSinceEpoch}';
+      final doc = await _pdfService.createPdfFromImages(optimized, fileName);
+      await _storageService.saveDocument(doc);
+      _documents.insert(0, doc);
+      _setLoading(false);
+      notifyListeners();
+      return doc;
+    } catch (_) {
+      _setLoading(false);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<ScannedDocument?> importPdfFile(File pdfFile, {String? name}) async {
+    if (!await pdfFile.exists()) return null;
+    _setLoading(true);
+    try {
+      final docsPath = await _storageService.getDocumentsDirectory();
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final baseName = (name == null || name.trim().isEmpty)
+          ? 'Imported_$stamp'
+          : name;
+      final targetPath = '$docsPath/$baseName.pdf';
+      final copied = await pdfFile.copy(targetPath);
+      final doc = ScannedDocument(
+        id: stamp.toString(),
+        name: '$baseName.pdf',
+        filePath: copied.path,
+        createdAt: DateTime.now(),
+        pageCount: 1,
+        fileSize: await copied.length(),
+        isPdf: true,
+      );
+      await _storageService.saveDocument(doc);
+      _documents.insert(0, doc);
+      _setLoading(false);
+      notifyListeners();
+      return doc;
+    } catch (_) {
+      _setLoading(false);
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<ScannedDocument?> importAnyFile(
+    File file, {
+    String? name,
+    int pageCount = 1,
+  }) async {
+    if (!await file.exists()) return null;
+    _setLoading(true);
+    try {
+      final docsPath = await _storageService.getDocumentsDirectory();
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final ext = _safeExtension(file.path);
+      final baseName = (name == null || name.trim().isEmpty)
+          ? 'Imported_$stamp'
+          : name;
+      final targetPath = '$docsPath/$baseName$ext';
+      final copied = await file.copy(targetPath);
+      final isPdf = ext.toLowerCase() == '.pdf';
+      final doc = ScannedDocument(
+        id: stamp.toString(),
+        name: '$baseName$ext',
+        filePath: copied.path,
+        createdAt: DateTime.now(),
+        pageCount: pageCount,
+        fileSize: await copied.length(),
+        isPdf: isPdf,
+      );
+      await _storageService.saveDocument(doc);
+      _documents.insert(0, doc);
+      _setLoading(false);
+      notifyListeners();
+      return doc;
+    } catch (_) {
       _setLoading(false);
       notifyListeners();
       return null;
@@ -355,4 +480,57 @@ class AppState extends ChangeNotifier {
     _ocrService.dispose();
     super.dispose();
   }
+
+  Future<SaveAndExportResult> saveAndExportCurrentScan() async {
+    final imagesForGallery = List<File>.from(_capturedImages);
+    final document = await saveDocument('Scan');
+    if (document == null) {
+      return const SaveAndExportResult(
+        success: false,
+        appSaved: false,
+        gallerySavedCount: 0,
+        totalGalleryImages: 0,
+      );
+    }
+
+    final galleryResult = await _exportService.saveImagesToGallery(
+      imagesForGallery,
+    );
+    return SaveAndExportResult(
+      success: true,
+      appSaved: true,
+      document: document,
+      gallerySavedCount: galleryResult.saved,
+      totalGalleryImages: galleryResult.total,
+      exportErrors: galleryResult.errors,
+    );
+  }
+
+  String _safeExtension(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.pdf')) return '.pdf';
+    if (lower.endsWith('.png')) return '.png';
+    if (lower.endsWith('.jpeg')) return '.jpeg';
+    if (lower.endsWith('.jpg')) return '.jpg';
+    if (lower.endsWith('.webp')) return '.webp';
+    return '.jpg';
+  }
+}
+
+class SaveAndExportResult {
+  final bool success;
+  final bool appSaved;
+  final ScannedDocument? document;
+  final int gallerySavedCount;
+  final int totalGalleryImages;
+  final List<String> exportErrors;
+
+  const SaveAndExportResult({
+    required this.success,
+    required this.appSaved,
+    required this.gallerySavedCount,
+    required this.totalGalleryImages,
+    this.document,
+    this.exportErrors = const [],
+  });
 }

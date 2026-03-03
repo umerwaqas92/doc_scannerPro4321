@@ -8,7 +8,10 @@ class HomePage extends StatelessWidget {
   final Function(int) onDocTap;
   final VoidCallback onSeeAllTap;
   final VoidCallback onSearchTap;
-  final VoidCallback onProfileTap;
+  final VoidCallback onPdfToolTap;
+  final VoidCallback onOcrToolTap;
+  final VoidCallback onShareToolTap;
+  final VoidCallback onCompressToolTap;
 
   const HomePage({
     super.key,
@@ -17,7 +20,10 @@ class HomePage extends StatelessWidget {
     required this.onDocTap,
     required this.onSeeAllTap,
     required this.onSearchTap,
-    required this.onProfileTap,
+    required this.onPdfToolTap,
+    required this.onOcrToolTap,
+    required this.onShareToolTap,
+    required this.onCompressToolTap,
   });
 
   @override
@@ -56,13 +62,7 @@ class HomePage extends StatelessWidget {
               letterSpacing: -0.5,
             ),
           ),
-          Row(
-            children: [
-              _buildIconButton(Icons.search, onSearchTap),
-              const SizedBox(width: 10),
-              _buildIconButton(Icons.person_outline, onProfileTap),
-            ],
-          ),
+          Row(children: [_buildIconButton(Icons.search, onSearchTap)]),
         ],
       ),
     );
@@ -113,7 +113,7 @@ class HomePage extends StatelessWidget {
                     'Tap to scan documents',
                     style: TextStyle(
                       fontSize: 13,
-                      color: Colors.white.withOpacity(0.6),
+                      color: Colors.white.withValues(alpha: 0.6),
                     ),
                   ),
                 ],
@@ -123,7 +123,7 @@ class HomePage extends StatelessWidget {
               width: 52,
               height: 52,
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.12),
+                color: Colors.white.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: const Icon(
@@ -158,39 +158,50 @@ class HomePage extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Row(
         children: [
-          _buildQuickAction(Icons.picture_as_pdf, 'PDF'),
-          _buildQuickAction(Icons.text_snippet_outlined, 'OCR Text'),
-          _buildQuickAction(Icons.share_outlined, 'Share'),
-          _buildQuickAction(Icons.folder_zip_outlined, 'Compress'),
+          _buildQuickAction(Icons.picture_as_pdf, 'PDF', onPdfToolTap),
+          _buildQuickAction(
+            Icons.text_snippet_outlined,
+            'OCR Text',
+            onOcrToolTap,
+          ),
+          _buildQuickAction(Icons.share_outlined, 'Share', onShareToolTap),
+          _buildQuickAction(
+            Icons.folder_zip_outlined,
+            'Compress',
+            onCompressToolTap,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildQuickAction(IconData icon, String label) {
+  Widget _buildQuickAction(IconData icon, String label, VoidCallback onTap) {
     return Expanded(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 5),
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, size: 22, color: AppColors.text),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: AppColors.text2,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 5),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(
+            children: [
+              Icon(icon, size: 22, color: AppColors.text),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.text2,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

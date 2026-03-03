@@ -43,6 +43,15 @@ class OcrService {
           candidates.add(thresholded);
           generatedVariants.add(thresholded);
         }
+
+        final textBoost = await _createTextFocusedVariant(
+          imageFile,
+          tag: 'ocr_text_plus',
+        );
+        if (textBoost != null) {
+          candidates.add(textBoost);
+          generatedVariants.add(textBoost);
+        }
       }
 
       final seen = <String>{};
@@ -113,9 +122,9 @@ class OcrService {
   double _scoreRecognizedText(String text, List<TextBlock> blocks) {
     if (text.trim().isEmpty) return 0.0;
 
-    final lengthScore = (text.length / 1800).clamp(0.0, 1.0);
+    final lengthScore = (text.length / 1600).clamp(0.0, 1.0);
     final lineCount = blocks.fold<int>(0, (sum, b) => sum + b.lines.length);
-    final lineScore = (lineCount / 40).clamp(0.0, 1.0);
+    final lineScore = (lineCount / 35).clamp(0.0, 1.0);
 
     final validChars = RegExp(
       r'[A-Za-z0-9\s.,:;!?()\-\[\]/\\@#$%&*+=_]',
@@ -137,13 +146,19 @@ class OcrService {
 
     final hasBadRepeats = RegExp(r'(.)\1{5,}').hasMatch(text);
     final repeatPenalty = hasBadRepeats ? 0.15 : 0.0;
+    final gibberishPenalty =
+        RegExp(
+          r'[^A-Za-z0-9\s.,:;!?()\-\[\]/\\@#$%&*+=_]',
+        ).allMatches(text).length /
+        text.length;
 
     final score =
-        (0.30 * lengthScore +
+        (0.26 * lengthScore +
                 0.20 * lineScore +
                 0.25 * validRatio +
-                0.25 * wordQuality -
-                repeatPenalty)
+                0.29 * wordQuality -
+                repeatPenalty -
+                (0.14 * gibberishPenalty))
             .clamp(0.0, 1.0);
     return score;
   }
@@ -220,6 +235,31 @@ class OcrService {
     }
   }
 
+  Future<File?> _createTextFocusedVariant(
+    File source, {
+    required String tag,
+  }) async {
+    try {
+      final bytes = await source.readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      image = img.bakeOrientation(image);
+      image = img.grayscale(image);
+      image = img.adjustColor(image, contrast: 2.1, brightness: 1.08);
+      image = img.gaussianBlur(image, radius: 1);
+      image = img.luminanceThreshold(image, threshold: 0.5);
+
+      final tempFile = File(
+        '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',
+      );
+      await tempFile.writeAsBytes(img.encodeJpg(image, quality: 96));
+      return tempFile;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void dispose() {
     _textRecognizer.close();
   }
@@ -243,6 +283,26 @@ class OcrResult {
     this.sourcePath,
     this.sourceFilter,
   });
+
+  OcrResult copyWith({
+    bool? success,
+    String? text,
+    String? error,
+    List<TextBlock>? blocks,
+    double? confidence,
+    String? sourcePath,
+    DocumentFilterMode? sourceFilter,
+  }) {
+    return OcrResult(
+      success: success ?? this.success,
+      text: text ?? this.text,
+      error: error ?? this.error,
+      blocks: blocks ?? this.blocks,
+      confidence: confidence ?? this.confidence,
+      sourcePath: sourcePath ?? this.sourcePath,
+      sourceFilter: sourceFilter ?? this.sourceFilter,
+    );
+  }
 }
 
 class TextBlock {

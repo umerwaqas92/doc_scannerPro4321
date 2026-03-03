@@ -1,7 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
+import '../models/scan_pipeline_models.dart';
 import '../services/ocr_service.dart';
+import '../theme/app_theme.dart';
 
 class ScanResultPage extends StatefulWidget {
   final List<File> scannedImages;
@@ -13,7 +14,7 @@ class ScanResultPage extends StatefulWidget {
   final Function(int) onRemoveImage;
   final VoidCallback onAddMore;
   final VoidCallback onProcessOcr;
-  final Function(String) onTextChanged;
+  final void Function(int pageIndex, String text) onTextChanged;
 
   const ScanResultPage({
     super.key,
@@ -53,25 +54,16 @@ class _ScanResultPageState extends State<ScanResultPage>
     _updateTextController();
   }
 
-  void _updateTextController() {
-    if (widget.ocrResults.isNotEmpty &&
-        _currentPage < widget.ocrResults.length) {
-      _textController.text = widget.ocrResults[_currentPage].text;
-    } else {
-      _textController.text = '';
-    }
-  }
-
   @override
-  void didUpdateWidget(ScanResultPage oldWidget) {
+  void didUpdateWidget(covariant ScanResultPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.scannedImages != widget.scannedImages ||
-        oldWidget.ocrResults != widget.ocrResults) {
-      if (_currentPage >= widget.scannedImages.length) {
-        _currentPage = widget.scannedImages.isEmpty
-            ? 0
-            : widget.scannedImages.length - 1;
-      }
+    if (_currentPage >= widget.scannedImages.length) {
+      _currentPage = widget.scannedImages.isEmpty
+          ? 0
+          : widget.scannedImages.length - 1;
+    }
+    if (oldWidget.ocrResults != widget.ocrResults ||
+        oldWidget.scannedImages != widget.scannedImages) {
       _updateTextController();
     }
   }
@@ -82,6 +74,19 @@ class _ScanResultPageState extends State<ScanResultPage>
     _tabController.dispose();
     _textController.dispose();
     super.dispose();
+  }
+
+  void _updateTextController() {
+    final text = (_currentPage < widget.ocrResults.length)
+        ? widget.ocrResults[_currentPage].text
+        : '';
+    if (_textController.text != text) {
+      _textController.value = _textController.value.copyWith(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+        composing: TextRange.empty,
+      );
+    }
   }
 
   @override
@@ -177,13 +182,13 @@ class _ScanResultPageState extends State<ScanResultPage>
         Expanded(
           child: PageView.builder(
             controller: _pageController,
+            itemCount: widget.scannedImages.length,
             onPageChanged: (index) {
               setState(() {
                 _currentPage = index;
                 _updateTextController();
               });
             },
-            itemCount: widget.scannedImages.length,
             itemBuilder: (context, index) {
               return _buildImagePreview(widget.scannedImages[index], index);
             },
@@ -243,28 +248,34 @@ class _ScanResultPageState extends State<ScanResultPage>
     final hasText =
         widget.ocrResults.isNotEmpty &&
         _currentPage < widget.ocrResults.length &&
-        widget.ocrResults[_currentPage].text.isNotEmpty;
+        widget.ocrResults[_currentPage].text.trim().isNotEmpty;
 
     if (!hasText) {
-      return Center(
+      return const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.text_fields, size: 64, color: AppColors.text3),
-            const SizedBox(height: 16),
-            const Text(
+            Icon(Icons.text_fields, size: 64, color: AppColors.text3),
+            SizedBox(height: 16),
+            Text(
               'No text detected',
               style: TextStyle(fontSize: 16, color: AppColors.text2),
             ),
-            const SizedBox(height: 8),
-            const Text(
-              'Tap "Extract Text" to scan for text',
+            SizedBox(height: 8),
+            Text(
+              'Tap "Extract Text" to scan this page',
               style: TextStyle(fontSize: 14, color: AppColors.text3),
             ),
           ],
         ),
       );
     }
+
+    final result = widget.ocrResults[_currentPage];
+    final confidencePct = (result.confidence * 100)
+        .clamp(0, 100)
+        .toStringAsFixed(0);
+    final source = result.sourceFilter?.label ?? 'Auto';
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -290,7 +301,12 @@ class _ScanResultPageState extends State<ScanResultPage>
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          Text(
+            'Confidence: $confidencePct% | Source: $source',
+            style: const TextStyle(fontSize: 12, color: AppColors.text3),
+          ),
+          const SizedBox(height: 10),
           Expanded(
             child: TextField(
               controller: _textController,
@@ -307,7 +323,7 @@ class _ScanResultPageState extends State<ScanResultPage>
                 hintText: 'No text detected in this image',
                 hintStyle: TextStyle(color: AppColors.text3),
               ),
-              onChanged: widget.onTextChanged,
+              onChanged: (value) => widget.onTextChanged(_currentPage, value),
             ),
           ),
         ],
@@ -318,7 +334,7 @@ class _ScanResultPageState extends State<ScanResultPage>
   Widget _buildOcrButton() {
     final hasValidResults =
         widget.ocrResults.isNotEmpty &&
-        widget.ocrResults.any((r) => r.text.isNotEmpty);
+        widget.ocrResults.any((r) => r.text.trim().isNotEmpty);
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -399,7 +415,7 @@ class _ScanResultPageState extends State<ScanResultPage>
                 borderRadius: BorderRadius.circular(18),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 20,
                     offset: const Offset(0, 10),
                   ),
@@ -413,9 +429,8 @@ class _ScanResultPageState extends State<ScanResultPage>
                     Image.file(
                       image,
                       fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) {
-                        return _buildErrorWidget();
-                      },
+                      errorBuilder: (context, error, stackTrace) =>
+                          _buildErrorWidget(),
                     ),
                     Positioned(
                       top: 12,
@@ -425,7 +440,7 @@ class _ScanResultPageState extends State<ScanResultPage>
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.5),
+                            color: Colors.black.withValues(alpha: 0.5),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
@@ -474,7 +489,7 @@ class _ScanResultPageState extends State<ScanResultPage>
     }
 
     final result = widget.ocrResults[_currentPage];
-    final hasText = result.text.isNotEmpty;
+    final hasText = result.text.trim().isNotEmpty;
     final confidencePct = (result.confidence * 100)
         .clamp(0, 100)
         .toStringAsFixed(0);
@@ -503,7 +518,7 @@ class _ScanResultPageState extends State<ScanResultPage>
               child: Text(
                 hasText
                     ? lowConfidence
-                          ? 'Text extracted with low confidence ($confidencePct%). Try another filter.'
+                          ? 'Text extracted with low confidence ($confidencePct%). Try Text+ filter in Edit and refresh OCR.'
                           : 'Text extracted successfully ($confidencePct%)'
                     : 'No text detected. Try scanning again with better lighting.',
                 style: TextStyle(

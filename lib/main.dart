@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
-import 'widgets/status_bar.dart';
 import 'widgets/bottom_nav.dart';
 import 'pages/splash_screen.dart';
 import 'pages/home_page.dart';
@@ -11,6 +10,10 @@ import 'pages/image_edit_page.dart';
 import 'pages/doc_view_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
+import 'pages/compressor_page.dart';
+import 'pages/ocr_tool_input_page.dart';
+import 'pages/pdf_maker_page.dart';
+import 'pages/share_history_page.dart';
 import 'services/app_state.dart';
 import 'models/scan_pipeline_models.dart';
 
@@ -54,6 +57,10 @@ class _MainScreenState extends State<MainScreen> {
   bool _showSplash = true;
 
   void _onNavTap(int index) {
+    if (index == 3) {
+      _openOcrTool();
+      return;
+    }
     setState(() {
       _currentIndex = index;
       _showScanner = false;
@@ -215,7 +222,16 @@ class _MainScreenState extends State<MainScreen> {
 
   void _onResultSave() async {
     final appState = context.read<AppState>();
-    await appState.saveDocument('Scan');
+    final result = await appState.saveAndExportCurrentScan();
+
+    if (!mounted) return;
+
+    if (!result.success) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Failed to save document')));
+      return;
+    }
 
     setState(() {
       _showResult = false;
@@ -223,14 +239,18 @@ class _MainScreenState extends State<MainScreen> {
       _currentIndex = 0;
     });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Document saved successfully!'),
-          backgroundColor: AppColors.green,
-        ),
-      );
-    }
+    final galleryNote = result.totalGalleryImages == 0
+        ? 'No images to export'
+        : 'Gallery: ${result.gallerySavedCount}/${result.totalGalleryImages}';
+    final errorNote = result.exportErrors.isEmpty
+        ? ''
+        : ' (${result.exportErrors.first})';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved to history. $galleryNote$errorNote'),
+        backgroundColor: AppColors.green,
+      ),
+    );
   }
 
   void _onResultBack() {
@@ -279,6 +299,31 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  Future<void> _openPdfMaker() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const PdfMakerPage()));
+  }
+
+  Future<void> _openOcrTool() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const OcrToolInputPage()));
+  }
+
+  Future<void> _openShareTool() async {
+    final docs = context.read<AppState>().documents;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ShareHistoryPage(documents: docs)),
+    );
+  }
+
+  Future<void> _openCompressorTool() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const CompressorPage()));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AppState>(
@@ -300,8 +345,6 @@ class _MainScreenState extends State<MainScreen> {
           body: SafeArea(
             child: Column(
               children: [
-                if (!_showScanner && !_showResult && !_showEdit)
-                  const StatusBarWidget(),
                 Expanded(child: _buildCurrentPage(appState)),
                 if (!_showScanner && !_showResult && !_showEdit)
                   BottomNavWidget(
@@ -355,7 +398,8 @@ class _MainScreenState extends State<MainScreen> {
         onRemoveImage: _onResultRemoveImage,
         onAddMore: _onResultAddMore,
         onProcessOcr: () => appState.processOcrForAllImages(),
-        onTextChanged: (text) {},
+        onTextChanged: (pageIndex, text) =>
+            appState.updateOcrTextForPage(pageIndex, text),
       );
     }
 
@@ -368,7 +412,10 @@ class _MainScreenState extends State<MainScreen> {
           onDocTap: (index) => _onDocTap(index),
           onSeeAllTap: _onSeeAllTap,
           onSearchTap: () {},
-          onProfileTap: () {},
+          onPdfToolTap: _openPdfMaker,
+          onOcrToolTap: _openOcrTool,
+          onShareToolTap: _openShareTool,
+          onCompressToolTap: _openCompressorTool,
         );
       case 1:
         return GalleryPage(
@@ -399,7 +446,10 @@ class _MainScreenState extends State<MainScreen> {
           onDocTap: (index) => _onDocTap(index),
           onSeeAllTap: _onSeeAllTap,
           onSearchTap: () {},
-          onProfileTap: () {},
+          onPdfToolTap: _openPdfMaker,
+          onOcrToolTap: _openOcrTool,
+          onShareToolTap: _openShareTool,
+          onCompressToolTap: _openCompressorTool,
         );
       case 4:
         return SettingsPage(
@@ -435,7 +485,10 @@ class _MainScreenState extends State<MainScreen> {
           onDocTap: (index) => _onDocTap(index),
           onSeeAllTap: _onSeeAllTap,
           onSearchTap: () {},
-          onProfileTap: () {},
+          onPdfToolTap: _openPdfMaker,
+          onOcrToolTap: _openOcrTool,
+          onShareToolTap: _openShareTool,
+          onCompressToolTap: _openCompressorTool,
         );
     }
   }
