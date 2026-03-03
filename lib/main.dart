@@ -310,6 +310,25 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  Future<void> _onGalleryDeleteDoc(ScannedDocument document) async {
+    final appState = context.read<AppState>();
+    try {
+      await appState.deleteDocument(document.id);
+      if (appState.selectedDocument?.id == document.id) {
+        appState.selectDocument(null);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Document deleted')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to delete document')),
+      );
+    }
+  }
+
   Future<void> _onDocSave() async {
     final appState = context.read<AppState>();
     final doc = appState.selectedDocument;
@@ -597,7 +616,9 @@ class _MainScreenState extends State<MainScreen> {
             if (index < 0 || index >= appState.documents.length) return;
             _onDocTap(appState.documents[index]);
           },
-          onMenuTap: () {},
+          onDocDelete: (doc) {
+            _onGalleryDeleteDoc(doc);
+          },
         );
       case 2:
         final selected = appState.selectedDocument;

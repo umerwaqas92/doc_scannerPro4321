@@ -5,8 +5,6 @@ import '../services/ocr_service.dart';
 import '../services/ocr_tool_service.dart';
 import '../theme/app_theme.dart';
 
-enum _ReadLayoutMode { clean, raw }
-
 class OcrToolResultPage extends StatefulWidget {
   final OcrToolPageResult result;
   final VoidCallback? onBackToHome;
@@ -20,25 +18,30 @@ class OcrToolResultPage extends StatefulWidget {
 class _OcrToolResultPageState extends State<OcrToolResultPage> {
   int _currentPage = 0;
   bool _editMode = false;
-  _ReadLayoutMode _readLayoutMode = _ReadLayoutMode.clean;
-  late List<String> _rawTexts;
-  late List<TextEditingController> _cleanControllers;
+  bool _cardVisible = false;
+  late List<TextEditingController> _controllers;
 
   @override
   void initState() {
     super.initState();
-    _rawTexts = widget.result.pages
-        .map((page) => _normalizeRaw(_buildRawText(page)))
+    final normalized = widget.result.pages
+        .map(_buildSourceText)
+        .map(_formatForRead)
         .toList(growable: false);
-    _cleanControllers = _rawTexts
-        .map((raw) => TextEditingController(text: _normalizeForRead(raw)))
+    _controllers = normalized
+        .map((text) => TextEditingController(text: text))
         .toList(growable: false);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _cardVisible = true);
+    });
   }
 
   @override
   void dispose() {
-    for (final c in _cleanControllers) {
-      c.dispose();
+    for (final controller in _controllers) {
+      controller.dispose();
     }
     super.dispose();
   }
@@ -47,10 +50,7 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
   Widget build(BuildContext context) {
     final total = widget.result.pages.length;
     final safePage = total == 0 ? 0 : _currentPage.clamp(0, total - 1);
-    final currentController = total == 0 ? null : _cleanControllers[safePage];
-    final pageText = total == 0
-        ? ''
-        : _currentDisplayText(safePage, cleanController: currentController);
+    final currentController = total == 0 ? null : _controllers[safePage];
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -73,7 +73,7 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: AppColors.text2),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Row(
               children: [
                 if (total > 1)
@@ -114,81 +114,68 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
                 ),
               ],
             ),
-            if (!_editMode) ...[
-              const SizedBox(height: 8),
-              SegmentedButton<_ReadLayoutMode>(
-                segments: const [
-                  ButtonSegment<_ReadLayoutMode>(
-                    value: _ReadLayoutMode.clean,
-                    label: Text('Clean'),
-                  ),
-                  ButtonSegment<_ReadLayoutMode>(
-                    value: _ReadLayoutMode.raw,
-                    label: Text('Raw'),
-                  ),
-                ],
-                selected: {_readLayoutMode},
-                onSelectionChanged: (selection) {
-                  if (selection.isEmpty) return;
-                  setState(() => _readLayoutMode = selection.first);
-                },
+            const SizedBox(height: 8),
+            const Text(
+              'Extracted Text',
+              style: TextStyle(
+                color: AppColors.text2,
+                fontWeight: FontWeight.w600,
               ),
-            ],
+            ),
             const SizedBox(height: 8),
             Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
-                ),
-                child: total == 0
-                    ? const Center(
-                        child: Text(
-                          'No text found',
-                          style: TextStyle(color: AppColors.text2),
-                        ),
-                      )
-                    : _editMode
-                    ? TextField(
-                        controller: currentController,
-                        maxLines: null,
-                        expands: true,
-                        textAlignVertical: TextAlignVertical.top,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          height: 1.55,
-                          color: AppColors.text,
-                        ),
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          hintText: 'No text detected',
-                        ),
-                      )
-                    : SingleChildScrollView(
-                        child: SelectableText(
-                          pageText,
-                          style: TextStyle(
-                            fontSize: _readLayoutMode == _ReadLayoutMode.raw
-                                ? 15
-                                : 16,
-                            height: _readLayoutMode == _ReadLayoutMode.raw
-                                ? 1.6
-                                : 1.7,
-                            color: AppColors.text,
-                            letterSpacing:
-                                _readLayoutMode == _ReadLayoutMode.raw
-                                ? 0
-                                : 0.1,
-                            fontFamily: _readLayoutMode == _ReadLayoutMode.raw
-                                ? 'monospace'
-                                : null,
+              child: AnimatedOpacity(
+                opacity: _cardVisible ? 1 : 0,
+                duration: const Duration(milliseconds: 280),
+                curve: Curves.easeOut,
+                child: AnimatedSlide(
+                  offset: _cardVisible ? Offset.zero : const Offset(0, 0.03),
+                  duration: const Duration(milliseconds: 280),
+                  curve: Curves.easeOutCubic,
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: total == 0
+                        ? const Center(
+                            child: Text(
+                              'No text found',
+                              style: TextStyle(color: AppColors.text2),
+                            ),
+                          )
+                        : _editMode
+                        ? TextField(
+                            controller: currentController,
+                            maxLines: null,
+                            expands: true,
+                            textAlignVertical: TextAlignVertical.top,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              height: 1.7,
+                              color: AppColors.text,
+                            ),
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              hintText: 'No text detected',
+                            ),
+                          )
+                        : SingleChildScrollView(
+                            child: SelectableText(
+                              currentController?.text ?? '',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                height: 1.75,
+                                color: AppColors.text,
+                              ),
+                              textAlign: TextAlign.left,
+                            ),
                           ),
-                          textAlign: TextAlign.left,
-                        ),
-                      ),
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -231,12 +218,33 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     );
   }
 
-  String _normalizeForRead(String raw) {
+  String _buildSourceText(OcrResult page) {
+    if (page.blocks.isEmpty) return page.text;
+
+    final blockTexts = <String>[];
+    for (final block in page.blocks) {
+      final lines = block.lines
+          .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
+          .where((line) => line.isNotEmpty && !_isNoiseLine(line))
+          .toList(growable: false);
+      if (lines.isEmpty) continue;
+      blockTexts.add(lines.join('\n'));
+    }
+
+    if (blockTexts.isNotEmpty) {
+      return blockTexts.join('\n\n');
+    }
+    return page.text;
+  }
+
+  String _formatForRead(String raw) {
     if (raw.trim().isEmpty) return '';
+
     final lines = raw
         .replaceAll('\r\n', '\n')
         .split('\n')
         .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((line) => !_isNoiseLine(line))
         .toList(growable: false);
 
     final paragraphs = <String>[];
@@ -248,15 +256,15 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
         continue;
       }
 
-      final isBullet = RegExp(r'^([-*•]|[0-9]+[.)])\s+').hasMatch(line);
+      final isBullet = RegExp(r'^([-*]|[0-9]+[.)])\s+').hasMatch(line);
       final isHeading =
-          line.length <= 65 &&
-          RegExp(r'^[A-Z][A-Za-z0-9\s,:-]+$').hasMatch(line);
-      final looksLikeTableRow =
+          line.length <= 70 &&
+          RegExp(r'^[A-Z][A-Za-z0-9\s,:()\-]+$').hasMatch(line);
+      final looksLikeTable =
           RegExp(r'[:|]').hasMatch(line) &&
           line.split(RegExp(r'\s+')).length >= 3;
 
-      if (isBullet || isHeading || looksLikeTableRow) {
+      if (isBullet || isHeading || looksLikeTable) {
         _flushParagraph(paragraphs, buffer);
         paragraphs.add(line);
         continue;
@@ -270,7 +278,8 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
       final current = buffer.toString();
       final endsSentence = RegExp(r'[.!?;:]$').hasMatch(current);
       final shortLineBreak =
-          line.length < 24 && !RegExp(r'^[a-z]').hasMatch(line);
+          line.length < 24 && RegExp(r'^[A-Z0-9]').hasMatch(line);
+
       if (current.endsWith('-')) {
         buffer
           ..clear()
@@ -285,75 +294,36 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     }
 
     _flushParagraph(paragraphs, buffer);
-
     return paragraphs.join('\n\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
   }
 
-  String _normalizeRaw(String raw) {
-    if (raw.trim().isEmpty) return '';
-    return raw
-        .replaceAll('\r\n', '\n')
-        .split('\n')
-        .map((line) => line.replaceAll(RegExp(r'[ \t]+$'), ''))
-        .join('\n')
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .trim();
-  }
-
-  String _buildRawText(OcrResult page) {
-    final blocks = page.blocks;
-    if (blocks.isNotEmpty) {
-      final grouped = blocks
-          .map((block) {
-            final lines = block.lines
-                .map((line) => line.replaceAll(RegExp(r'\s+$'), ''))
-                .where((line) => line.trim().isNotEmpty)
-                .toList(growable: false);
-            return lines.join('\n');
-          })
-          .where((blockText) => blockText.trim().isNotEmpty)
-          .toList(growable: false);
-      if (grouped.isNotEmpty) {
-        return grouped.join('\n\n');
-      }
+  bool _isNoiseLine(String line) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return false;
+    if (RegExp(r'^\d{1,2}:\d{2}(\s?[APap][Mm])?$').hasMatch(trimmed)) {
+      return true;
     }
-    return page.text;
-  }
-
-  String _currentDisplayText(
-    int pageIndex, {
-    required TextEditingController? cleanController,
-  }) {
-    if (_editMode || _readLayoutMode == _ReadLayoutMode.clean) {
-      return _normalizeForRead(cleanController?.text ?? '');
+    if (RegExp(r'^(no sim)$', caseSensitive: false).hasMatch(trimmed)) {
+      return true;
     }
-    if (pageIndex < _rawTexts.length) {
-      return _normalizeRaw(_rawTexts[pageIndex]);
+    if (RegExp(r'^[<>|]+$').hasMatch(trimmed)) return true;
+    if (trimmed.length <= 2 && RegExp(r'^[^A-Za-z0-9]+$').hasMatch(trimmed)) {
+      return true;
     }
-    return '';
+    return false;
   }
 
   String _allText() {
-    if (_readLayoutMode == _ReadLayoutMode.raw && !_editMode) {
-      return _rawTexts
-          .map(_normalizeRaw)
-          .where((text) => text.isNotEmpty)
-          .join('\n\n');
-    }
-    return _cleanControllers
-        .map((controller) => _normalizeForRead(controller.text))
+    return _controllers
+        .map((controller) => controller.text.trim())
         .where((text) => text.isNotEmpty)
         .join('\n\n');
   }
 
   Future<void> _copyCurrent() async {
-    if (_cleanControllers.isEmpty) return;
-    final safePage = _currentPage.clamp(0, _cleanControllers.length - 1);
-    final text = _currentDisplayText(
-      safePage,
-      cleanController: _cleanControllers[safePage],
-    );
-    await Clipboard.setData(ClipboardData(text: text));
+    if (_controllers.isEmpty) return;
+    final safePage = _currentPage.clamp(0, _controllers.length - 1);
+    await Clipboard.setData(ClipboardData(text: _controllers[safePage].text));
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,

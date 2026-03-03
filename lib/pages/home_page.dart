@@ -34,11 +34,15 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   late final TextEditingController _searchController;
+  late final FocusNode _searchFocusNode;
+  bool _searchOpen = false;
 
   @override
   void initState() {
     super.initState();
     _searchController = TextEditingController(text: widget.searchQuery);
+    _searchFocusNode = FocusNode();
+    _searchOpen = widget.searchQuery.trim().isNotEmpty;
   }
 
   @override
@@ -51,10 +55,14 @@ class _HomePageState extends State<HomePage> {
         selection: TextSelection.collapsed(offset: widget.searchQuery.length),
       );
     }
+    if (widget.searchQuery.trim().isNotEmpty && !_searchOpen) {
+      _searchOpen = true;
+    }
   }
 
   @override
   void dispose() {
+    _searchFocusNode.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -83,55 +91,123 @@ class _HomePageState extends State<HomePage> {
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'DocScan',
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w600,
-              color: AppColors.text,
-              letterSpacing: -0.5,
-            ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 220),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => FadeTransition(
+          opacity: animation,
+          child: SizeTransition(
+            sizeFactor: animation,
+            axisAlignment: -1,
+            child: child,
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _searchController,
-            onChanged: widget.onSearchChanged,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              hintText: 'Search documents',
-              prefixIcon: const Icon(Icons.search, color: AppColors.text2),
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      onPressed: () {
-                        _searchController.clear();
-                        widget.onSearchChanged('');
+        ),
+        child: _searchOpen
+            ? Row(
+                key: const ValueKey('search_open'),
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchController,
+                      focusNode: _searchFocusNode,
+                      onChanged: (value) {
+                        widget.onSearchChanged(value);
                         setState(() {});
                       },
-                      icon: const Icon(Icons.close, color: AppColors.text2),
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        hintText: 'Search documents',
+                        prefixIcon: const Icon(
+                          Icons.search,
+                          color: AppColors.text2,
+                        ),
+                        suffixIcon: _searchController.text.isEmpty
+                            ? null
+                            : IconButton(
+                                onPressed: () {
+                                  _searchController.clear();
+                                  widget.onSearchChanged('');
+                                  setState(() {});
+                                },
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: AppColors.text2,
+                                ),
+                              ),
+                        filled: true,
+                        fillColor: AppColors.surface,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: AppColors.border),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: AppColors.text2),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 12,
+                        ),
+                      ),
                     ),
-              filled: true,
-              fillColor: AppColors.surface,
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.border),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: _closeSearch,
+                    icon: const Icon(Icons.close, color: AppColors.text2),
+                  ),
+                ],
+              )
+            : Row(
+                key: const ValueKey('search_closed'),
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'DocScan',
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.text,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: _openSearch,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        border: Border.all(color: AppColors.border),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.search,
+                        size: 20,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.text2),
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                vertical: 12,
-                horizontal: 12,
-              ),
-            ),
-          ),
-        ],
       ),
     );
+  }
+
+  void _openSearch() {
+    setState(() => _searchOpen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchFocusNode.unfocus();
+    _searchController.clear();
+    widget.onSearchChanged('');
+    setState(() => _searchOpen = false);
   }
 
   Widget _buildScanBanner() {

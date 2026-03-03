@@ -4,14 +4,14 @@ import '../models/scanned_document.dart';
 
 class GalleryPage extends StatelessWidget {
   final List<ScannedDocument> documents;
-  final Function(int) onDocTap;
-  final VoidCallback onMenuTap;
+  final ValueChanged<int> onDocTap;
+  final ValueChanged<ScannedDocument> onDocDelete;
 
   const GalleryPage({
     super.key,
     required this.documents,
     required this.onDocTap,
-    required this.onMenuTap,
+    required this.onDocDelete,
   });
 
   @override
@@ -36,12 +36,7 @@ class GalleryPage extends StatelessWidget {
                     itemCount: documents.length,
                     itemBuilder: (context, index) {
                       final doc = documents[index];
-                      return _buildGalleryCard(
-                        doc.name,
-                        doc.formattedDate,
-                        doc.isPdf,
-                        index,
-                      );
+                      return _buildGalleryCard(context, doc, index);
                     },
                   ),
           ),
@@ -78,8 +73,8 @@ class GalleryPage extends StatelessWidget {
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'All Docs',
@@ -90,31 +85,24 @@ class GalleryPage extends StatelessWidget {
               letterSpacing: -0.5,
             ),
           ),
-          GestureDetector(
-            onTap: onMenuTap,
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                border: Border.all(color: AppColors.border),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.more_vert,
-                size: 20,
-                color: AppColors.text,
-              ),
-            ),
+          const SizedBox(height: 4),
+          const Text(
+            'Long press any document to delete',
+            style: TextStyle(fontSize: 12, color: AppColors.text3),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildGalleryCard(String name, String date, bool isPdf, int index) {
+  Widget _buildGalleryCard(
+    BuildContext context,
+    ScannedDocument document,
+    int index,
+  ) {
     return GestureDetector(
       onTap: () => onDocTap(index),
+      onLongPress: () => _confirmDelete(context, document),
       child: Container(
         decoration: BoxDecoration(
           color: AppColors.surface,
@@ -134,7 +122,7 @@ class GalleryPage extends StatelessWidget {
                 ),
                 child: Center(
                   child: Icon(
-                    isPdf ? Icons.picture_as_pdf : Icons.image,
+                    document.isPdf ? Icons.picture_as_pdf : Icons.image,
                     size: 32,
                     color: AppColors.border,
                   ),
@@ -147,7 +135,7 @@ class GalleryPage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name,
+                    document.name,
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w500,
@@ -158,7 +146,7 @@ class GalleryPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    date,
+                    document.formattedDate,
                     style: const TextStyle(
                       fontSize: 11,
                       color: AppColors.text3,
@@ -171,5 +159,32 @@ class GalleryPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDelete(
+    BuildContext context,
+    ScannedDocument document,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete document?'),
+        content: Text('Delete "${document.name}" from your history?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      onDocDelete(document);
+    }
   }
 }
