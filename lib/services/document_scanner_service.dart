@@ -1143,11 +1143,15 @@ class DocumentScannerService {
 
     final widthTop = _distance(topLeft, topRight);
     final widthBottom = _distance(bottomLeft, bottomRight);
-    final newWidth = math.max(widthTop, widthBottom).toInt();
+    final newWidth = math
+        .max(1, math.max(widthTop, widthBottom).round())
+        .clamp(1, image.width * 2);
 
     final heightLeft = _distance(topLeft, bottomLeft);
     final heightRight = _distance(topRight, bottomRight);
-    final newHeight = math.max(heightLeft, heightRight).toInt();
+    final newHeight = math
+        .max(1, math.max(heightLeft, heightRight).round())
+        .clamp(1, image.height * 2);
 
     final dst = [
       ScanPoint(0, 0),
@@ -1171,6 +1175,7 @@ class DocumentScannerService {
     int height,
   ) {
     final output = img.Image(width: width, height: height);
+    img.fill(output, color: img.ColorRgb8(255, 255, 255));
 
     final srcMatrix = _getPerspectiveTransform(srcPoints, dstPoints);
     final invMatrix = _invertMatrix(srcMatrix);
@@ -1196,79 +1201,100 @@ class DocumentScannerService {
     List<ScanPoint> src,
     List<ScanPoint> dst,
   ) {
-    final x0 = src[0].x, y0 = src[0].y, X0 = dst[0].x, Y0 = dst[0].y;
-    final x1 = src[1].x, y1 = src[1].y, X1 = dst[1].x, Y1 = dst[1].y;
-    final x2 = src[2].x, y2 = src[2].y, X2 = dst[2].x, Y2 = dst[2].y;
-    final x3 = src[3].x, y3 = src[3].y, X3 = dst[3].x, Y3 = dst[3].y;
-
-    final den =
-        (x0 - x1 + x2 - x3) * (y1 - y2 + y3 - y0) -
-        (x0 - x2) * (y1 - y3) +
-        (x1 - x3) * (y0 - y2);
-
-    if (den.abs() < 0.0001) {
+    if (src.length != 4 || dst.length != 4) {
       return [1, 0, 0, 0, 1, 0, 0, 0, 1];
     }
 
-    final a =
-        ((X0 - X1 + X2 - X3) * (y1 - y2 + y3 - y0) -
-            (x0 - x1 + x2 - x3) * (Y1 - Y2 + Y3 - Y0)) /
-        den;
-    final b =
-        ((x0 - x2) * (Y1 - Y3) -
-            (X0 - X2) * (y1 - y3) +
-            (x0 * y2 - x2 * y0) * (Y1 - Y2 + Y3 - Y0) -
-            (x0 - x2) * (y1 - y3) * Y0 +
-            (X0 - X2) * (y1 - y3) * y0) /
-        den;
-    final c =
-        ((x1 - x3) * (Y0 - Y3) -
-            (X0 - X3) * (y0 - y3) +
-            (x0 * y3 - x3 * y0) * (Y0 - Y1 + Y2 - Y3) -
-            (x0 - x3) * (y0 - y3) * Y1 +
-            (X0 - X3) * (y0 - y3) * y1) /
-        den;
-    final d =
-        ((y1 - y2 + y3 - y0) * (X0 - X1 + X2 - X3) -
-            (x0 - x1 + x2 - x3) * (Y1 - Y2 + Y3 - Y0)) /
-        den;
-    final e =
-        ((x0 - x2) * (Y1 - Y3) -
-            (X0 - X2) * (y1 - y3) +
-            (x0 * y2 - x2 * y0) * (Y1 - Y3) -
-            (x0 - x2) * (y1 - y3) * Y3 +
-            (X0 - X2) * (y1 - y3) * y3) /
-        den;
-    final f =
-        ((x0 - x2) * (y1 * Y3 - y3 * Y1) +
-            (x2 * y0 - x0 * y2) * (Y1 - Y3) +
-            (x0 * y2 - x2 * y0) * y3 * Y3 +
-            (x0 * y3 - x3 * y0) * y1 * Y1 -
-            (x1 * y3 - x3 * y1) * Y0 * Y2 +
-            (x1 * y2 - x2 * y1) * Y0 * Y3) /
-        den;
-    final g =
-        ((y1 - y2 + y3 - y0) * (x0 - x1 + x2 - x3) -
-            (x0 - x1 + x2 - x3) * (y1 - y2 + y3 - y0)) /
-        den;
-    final h =
-        ((x0 - x2) * (y1 - y3) -
-            (x0 * y2 - x2 * y0) +
-            (x0 * y2 - x2 * y0) +
-            (x0 - x2) * (y1 - y3) * y3 -
-            (x0 - x2) * y1 * y3 +
-            (x1 - x3) * (y0 - y3)) /
-        den;
-    final i =
-        ((x0 - x2) * y1 * y3 -
-            (x1 - x3) * y0 * y3 +
-            (x1 * y3 - x3 * y1) * y0 -
-            (x0 - x2) * y1 * y3 +
-            (x1 - x3) * y0 * y3 -
-            (x1 * y3 - x3 * y1) * y0) /
-        den;
+    final matrix = List<List<double>>.generate(
+      8,
+      (_) => List<double>.filled(8, 0.0),
+    );
+    final rhs = List<double>.filled(8, 0.0);
 
-    return [a, b, c, d, e, f, g, h, i];
+    for (var i = 0; i < 4; i++) {
+      final x = src[i].x;
+      final y = src[i].y;
+      final u = dst[i].x;
+      final v = dst[i].y;
+
+      final r0 = i * 2;
+      final r1 = r0 + 1;
+
+      matrix[r0][0] = x;
+      matrix[r0][1] = y;
+      matrix[r0][2] = 1;
+      matrix[r0][6] = -u * x;
+      matrix[r0][7] = -u * y;
+      rhs[r0] = u;
+
+      matrix[r1][3] = x;
+      matrix[r1][4] = y;
+      matrix[r1][5] = 1;
+      matrix[r1][6] = -v * x;
+      matrix[r1][7] = -v * y;
+      rhs[r1] = v;
+    }
+
+    final solved = _solveLinearSystem8x8(matrix, rhs);
+    if (solved == null) {
+      return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    }
+
+    return [
+      solved[0],
+      solved[1],
+      solved[2],
+      solved[3],
+      solved[4],
+      solved[5],
+      solved[6],
+      solved[7],
+      1.0,
+    ];
+  }
+
+  List<double>? _solveLinearSystem8x8(List<List<double>> a, List<double> b) {
+    const n = 8;
+    final aug = List<List<double>>.generate(n, (r) {
+      return [...a[r], b[r]];
+    });
+
+    for (int col = 0; col < n; col++) {
+      int pivot = col;
+      double maxAbs = aug[col][col].abs();
+      for (int r = col + 1; r < n; r++) {
+        final value = aug[r][col].abs();
+        if (value > maxAbs) {
+          maxAbs = value;
+          pivot = r;
+        }
+      }
+
+      if (maxAbs < 1e-9) {
+        return null;
+      }
+      if (pivot != col) {
+        final temp = aug[col];
+        aug[col] = aug[pivot];
+        aug[pivot] = temp;
+      }
+
+      final pivotVal = aug[col][col];
+      for (int c = col; c <= n; c++) {
+        aug[col][c] /= pivotVal;
+      }
+
+      for (int r = 0; r < n; r++) {
+        if (r == col) continue;
+        final factor = aug[r][col];
+        if (factor.abs() < 1e-12) continue;
+        for (int c = col; c <= n; c++) {
+          aug[r][c] -= factor * aug[col][c];
+        }
+      }
+    }
+
+    return List<double>.generate(n, (i) => aug[i][n]);
   }
 
   List<double> _invertMatrix(List<double> m) {
