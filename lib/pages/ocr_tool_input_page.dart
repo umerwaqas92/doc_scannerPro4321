@@ -16,6 +16,7 @@ class _OcrToolInputPageState extends State<OcrToolInputPage> {
   final OcrToolService _ocrToolService = OcrToolService();
 
   ImportedFile? _selected;
+  bool _picking = false;
   bool _analyzing = false;
 
   @override
@@ -78,10 +79,23 @@ class _OcrToolInputPageState extends State<OcrToolInputPage> {
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: _pickFile,
+                      onPressed: _picking ? null : _pickFile,
                       icon: const Icon(Icons.attach_file),
                       label: const Text('Choose File'),
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    child: _picking
+                        ? const LinearProgressIndicator(
+                            key: ValueKey('ocr_pick_progress'),
+                            color: AppColors.text,
+                          )
+                        : const SizedBox(
+                            key: ValueKey('ocr_pick_idle'),
+                            height: 4,
+                          ),
                   ),
                 ],
               ),
@@ -116,9 +130,17 @@ class _OcrToolInputPageState extends State<OcrToolInputPage> {
   }
 
   Future<void> _pickFile() async {
-    final imported = await _importService.pickImageOrPdf();
-    if (imported == null) return;
-    setState(() => _selected = imported);
+    setState(() => _picking = true);
+    try {
+      final imported = await _importService.pickImageOrPdf();
+      if (imported == null) return;
+      if (!mounted) return;
+      setState(() => _selected = imported);
+    } finally {
+      if (mounted) {
+        setState(() => _picking = false);
+      }
+    }
   }
 
   Future<void> _analyze() async {

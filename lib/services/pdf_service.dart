@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:path_provider/path_provider.dart';
 import '../models/scanned_document.dart';
 import 'storage_service.dart';
 
@@ -14,10 +14,16 @@ class PdfService {
     String fileName,
   ) async {
     final pdf = pw.Document();
+    var pageCount = 0;
 
     for (final image in images) {
       final imageBytes = await image.readAsBytes();
-      final pdfImage = pw.MemoryImage(imageBytes);
+      final decoded = img.decodeImage(imageBytes);
+      if (decoded == null) {
+        continue;
+      }
+      final normalized = img.encodeJpg(decoded, quality: 95);
+      final pdfImage = pw.MemoryImage(Uint8List.fromList(normalized));
 
       pdf.addPage(
         pw.Page(
@@ -28,6 +34,11 @@ class PdfService {
           },
         ),
       );
+      pageCount++;
+    }
+
+    if (pageCount == 0) {
+      throw Exception('No valid images to build PDF');
     }
 
     final docsPath = await _storageService.getDocumentsDirectory();
@@ -44,7 +55,7 @@ class PdfService {
       name: fileName,
       filePath: pdfPath,
       createdAt: DateTime.now(),
-      pageCount: images.length,
+      pageCount: pageCount,
       fileSize: fileSize,
       isPdf: true,
     );

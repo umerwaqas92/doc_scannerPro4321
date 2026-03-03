@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../services/app_state.dart';
 import '../services/file_import_service.dart';
 import '../theme/app_theme.dart';
+import 'pdf_result_page.dart';
 
 class PdfMakerPage extends StatefulWidget {
   const PdfMakerPage({super.key});
@@ -18,6 +19,7 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
     text: 'MyDocument',
   );
   final List<File> _images = [];
+  bool _pickingFile = false;
   bool _creating = false;
 
   @override
@@ -50,7 +52,7 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _pickImages,
+                    onPressed: _pickingFile ? null : _pickImages,
                     icon: const Icon(Icons.photo_library),
                     label: const Text('Add Images'),
                   ),
@@ -58,19 +60,33 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: _importExistingPdf,
+                    onPressed: _pickingFile ? null : _importExistingPdf,
                     icon: const Icon(Icons.upload_file),
                     label: const Text('Import PDF'),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 240),
+              child: _pickingFile
+                  ? const LinearProgressIndicator(
+                      key: ValueKey('picking_progress'),
+                      color: AppColors.text,
+                    )
+                  : const SizedBox(key: ValueKey('picking_idle'), height: 4),
+            ),
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text(
-                'Selected images: ${_images.length}',
-                style: const TextStyle(color: AppColors.text2),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                child: Text(
+                  'Selected images: ${_images.length}',
+                  key: ValueKey(_images.length),
+                  style: const TextStyle(color: AppColors.text2),
+                ),
               ),
             ),
             const SizedBox(height: 10),
@@ -160,9 +176,17 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
   }
 
   Future<void> _pickImages() async {
-    final files = await _importService.pickImages(multiple: true);
-    if (files.isEmpty) return;
-    setState(() => _images.addAll(files));
+    setState(() => _pickingFile = true);
+    try {
+      final files = await _importService.pickImages(multiple: true);
+      if (files.isEmpty) return;
+      if (!mounted) return;
+      setState(() => _images.addAll(files));
+    } finally {
+      if (mounted) {
+        setState(() => _pickingFile = false);
+      }
+    }
   }
 
   Future<void> _createPdf() async {
@@ -177,10 +201,9 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
       );
       if (!mounted) return;
       if (result != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('PDF created and saved in history')),
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => PdfResultPage(document: result)),
         );
-        Navigator.of(context).pop();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -196,21 +219,27 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
   }
 
   Future<void> _importExistingPdf() async {
-    final file = await _importService.pickPdf();
-    if (file == null) return;
-    if (!mounted) return;
-    final appState = context.read<AppState>();
-    final imported = await appState.importPdfFile(file);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          imported != null ? 'PDF added to history' : 'Failed to import PDF',
-        ),
-      ),
-    );
-    if (imported != null) {
-      Navigator.of(context).pop();
+    setState(() => _pickingFile = true);
+    try {
+      final file = await _importService.pickPdf();
+      if (file == null) return;
+      if (!mounted) return;
+      final appState = context.read<AppState>();
+      final imported = await appState.importPdfFile(file);
+      if (!mounted) return;
+      if (imported == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Failed to import PDF')));
+        return;
+      }
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => PdfResultPage(document: imported)),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _pickingFile = false);
+      }
     }
   }
 }

@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../services/app_state.dart';
 import '../services/compression_service.dart';
 import '../services/export_optimization_service.dart';
-import '../services/export_service.dart';
 import '../services/file_import_service.dart';
 import '../theme/app_theme.dart';
+import 'compress_result_page.dart';
 
 class CompressorPage extends StatefulWidget {
   const CompressorPage({super.key});
@@ -17,10 +15,10 @@ class CompressorPage extends StatefulWidget {
 class _CompressorPageState extends State<CompressorPage> {
   final FileImportService _importService = FileImportService();
   final CompressionService _compressionService = CompressionService();
-  final ExportService _exportService = ExportService();
 
   ImportedFile? _selected;
   ExportQualityPreset _quality = ExportQualityPreset.medium;
+  bool _pickingFile = false;
   bool _processing = false;
   int? _beforeBytes;
   int? _afterBytes;
@@ -58,12 +56,22 @@ class _CompressorPageState extends State<CompressorPage> {
                   Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
-                    onPressed: _pickFile,
+                    onPressed: _pickingFile ? null : _pickFile,
                     icon: const Icon(Icons.attach_file),
                     label: const Text('Choose File'),
                   ),
                 ],
               ),
+            ),
+            const SizedBox(height: 8),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: _pickingFile
+                  ? const LinearProgressIndicator(
+                      key: ValueKey('pick_progress'),
+                      color: AppColors.text,
+                    )
+                  : const SizedBox(key: ValueKey('pick_idle'), height: 4),
             ),
             const SizedBox(height: 12),
             const Text(
@@ -124,7 +132,7 @@ class _CompressorPageState extends State<CompressorPage> {
                         ),
                       )
                     : const Icon(Icons.folder_zip),
-                label: Text(_processing ? 'Compressing...' : 'Compress & Save'),
+                label: Text(_processing ? 'Compressing...' : 'Compress File'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.text,
                   foregroundColor: Colors.white,
@@ -139,14 +147,22 @@ class _CompressorPageState extends State<CompressorPage> {
   }
 
   Future<void> _pickFile() async {
-    final imported = await _importService.pickImageOrPdf();
-    if (imported == null) return;
-    final bytes = await imported.file.length();
-    setState(() {
-      _selected = imported;
-      _beforeBytes = bytes;
-      _afterBytes = null;
-    });
+    setState(() => _pickingFile = true);
+    try {
+      final imported = await _importService.pickImageOrPdf();
+      if (imported == null) return;
+      final bytes = await imported.file.length();
+      if (!mounted) return;
+      setState(() {
+        _selected = imported;
+        _beforeBytes = bytes;
+        _afterBytes = null;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _pickingFile = false);
+      }
+    }
   }
 
   Future<void> _compress() async {
@@ -163,20 +179,18 @@ class _CompressorPageState extends State<CompressorPage> {
       }
       final outSize = await out.length();
       if (!mounted) return;
-      final appState = context.read<AppState>();
-      await appState.importAnyFile(
-        out,
-        name: 'Compressed_${DateTime.now().millisecondsSinceEpoch}',
-      );
 
-      if (selected.type == ImportedFileType.image) {
-        await _exportService.saveImagesToGallery([out]);
-      }
-
-      if (!mounted) return;
       setState(() => _afterBytes = outSize);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Compressed file saved in history')),
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => CompressResultPage(
+            sourceFile: selected.file,
+            outputFile: out,
+            type: selected.type,
+            beforeBytes: _beforeBytes ?? 0,
+            afterBytes: outSize,
+          ),
+        ),
       );
     } catch (e) {
       if (!mounted) return;

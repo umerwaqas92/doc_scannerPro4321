@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'theme/app_theme.dart';
 import 'widgets/bottom_nav.dart';
 import 'pages/splash_screen.dart';
@@ -12,9 +14,15 @@ import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/compressor_page.dart';
 import 'pages/ocr_tool_input_page.dart';
+import 'pages/ocr_tool_result_page.dart';
+import 'pages/pdf_edit_page.dart';
 import 'pages/pdf_maker_page.dart';
+import 'pages/pdf_result_page.dart';
 import 'pages/share_history_page.dart';
 import 'services/app_state.dart';
+import 'services/export_service.dart';
+import 'services/ocr_tool_service.dart';
+import 'models/scanned_document.dart';
 import 'models/scan_pipeline_models.dart';
 
 void main() {
@@ -50,6 +58,7 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  final ExportService _exportService = ExportService();
   int _currentIndex = 0;
   bool _showScanner = false;
   bool _showEdit = false;
@@ -299,6 +308,147 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
+  Future<void> _onDocSave() async {
+    final appState = context.read<AppState>();
+    final doc = appState.selectedDocument;
+    if (doc == null) return;
+    final file = File(doc.filePath);
+    if (!await file.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Document file missing')));
+      return;
+    }
+
+    if (doc.isPdf) {
+      final base = doc.name.replaceAll('.pdf', '').replaceAll('.PDF', '');
+      final saved = await appState.importAnyFile(
+        file,
+        name: '${base}_saved',
+        pageCount: doc.pageCount,
+      );
+      if (saved != null) {
+        appState.selectDocument(saved);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            saved != null ? 'PDF saved successfully' : 'Failed to save PDF',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final result = await _exportService.saveImagesToGallery([file]);
+    if (!mounted) return;
+    final ok = result.saved > 0;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(ok ? 'Image saved to gallery' : 'Failed to save image'),
+      ),
+    );
+  }
+
+  Future<void> _onDocShare() async {
+    final doc = context.read<AppState>().selectedDocument;
+    if (doc == null) return;
+    final file = File(doc.filePath);
+    if (!await file.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Document file missing')));
+      return;
+    }
+    await Share.shareXFiles([XFile(file.path)], text: 'Shared from DocScan');
+  }
+
+  Future<void> _onDocOcr() async {
+    final doc = context.read<AppState>().selectedDocument;
+    if (doc == null) return;
+    final file = File(doc.filePath);
+    if (!await file.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Document file missing')));
+      return;
+    }
+    final tool = OcrToolService();
+    try {
+      final result = doc.isPdf
+          ? await tool.processPdf(file)
+          : await tool.processImage(file);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => OcrToolResultPage(result: result)),
+      );
+    } finally {
+      tool.dispose();
+    }
+  }
+
+  Future<void> _onDocEdit() async {
+    final appState = context.read<AppState>();
+    final navigator = Navigator.of(context);
+    final doc = appState.selectedDocument;
+    if (doc == null) return;
+
+    if (doc.isPdf) {
+      final updated = await navigator.push<ScannedDocument>(
+        MaterialPageRoute(builder: (_) => PdfEditPage(sourceDocument: doc)),
+      );
+      if (updated != null) {
+        appState.selectDocument(updated);
+      }
+      return;
+    }
+
+    final image = File(doc.filePath);
+    if (!await image.exists()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Image file missing')));
+      return;
+    }
+
+    final updated = await navigator.push<ScannedDocument>(
+      MaterialPageRoute(
+        builder: (pageContext) => ImageEditPage(
+          images: [image],
+          pipelineResults: <ScanPipelineResult?>[null],
+          onBack: () => Navigator.of(pageContext).pop(),
+          onContinue: (sessions) async {
+            final output = sessions.isEmpty ? null : sessions.first.outputFile;
+            if (output == null) {
+              Navigator.of(pageContext).pop();
+              return;
+            }
+            final saved = await appState.importAnyFile(
+              output,
+              name:
+                  '${doc.name.replaceAll('.jpg', '').replaceAll('.jpeg', '')}_edited',
+              pageCount: 1,
+            );
+            if (!pageContext.mounted) return;
+            Navigator.of(pageContext).pop(saved);
+          },
+        ),
+      ),
+    );
+    if (updated != null) {
+      appState.selectDocument(updated);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Image edited successfully')),
+      );
+    }
+  }
+
   Future<void> _openPdfMaker() async {
     await Navigator.of(
       context,
@@ -424,14 +574,22 @@ class _MainScreenState extends State<MainScreen> {
           onMenuTap: () {},
         );
       case 2:
+        final selected = appState.selectedDocument;
+        if (selected != null && selected.isPdf) {
+          return PdfResultPage(
+            document: selected,
+            onBack: _onDocViewBack,
+            onDocumentChanged: (updated) => appState.selectDocument(updated),
+          );
+        }
         return DocViewPage(
-          document: appState.selectedDocument,
+          document: selected,
           onBack: _onDocViewBack,
           onMoreTap: () {},
-          onSave: () {},
-          onShare: () {},
-          onOcr: () {},
-          onEdit: () {},
+          onSave: _onDocSave,
+          onShare: _onDocShare,
+          onOcr: _onDocOcr,
+          onEdit: _onDocEdit,
           onDelete: () async {
             if (appState.selectedDocument != null) {
               await appState.deleteDocument(appState.selectedDocument!.id);
@@ -459,14 +617,22 @@ class _MainScreenState extends State<MainScreen> {
           onFlashModeChanged: (value) => appState.setFlashMode(value),
         );
       case 5:
+        final selected = appState.selectedDocument;
+        if (selected != null && selected.isPdf) {
+          return PdfResultPage(
+            document: selected,
+            onBack: _onDocViewBack,
+            onDocumentChanged: (updated) => appState.selectDocument(updated),
+          );
+        }
         return DocViewPage(
-          document: appState.selectedDocument,
+          document: selected,
           onBack: _onDocViewBack,
           onMoreTap: () {},
-          onSave: () {},
-          onShare: () {},
-          onOcr: () {},
-          onEdit: () {},
+          onSave: _onDocSave,
+          onShare: _onDocShare,
+          onOcr: _onDocOcr,
+          onEdit: _onDocEdit,
           onDelete: () async {
             if (appState.selectedDocument != null) {
               await appState.deleteDocument(appState.selectedDocument!.id);
