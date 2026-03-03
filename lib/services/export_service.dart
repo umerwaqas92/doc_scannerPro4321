@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class GalleryExportResult {
@@ -34,7 +34,7 @@ class ExportService {
     for (var i = 0; i < valid.length; i++) {
       final file = valid[i];
       try {
-        final result = await ImageGallerySaver.saveFile(
+        final result = await ImageGallerySaverPlus.saveFile(
           file.path,
           name: _buildName(albumName, i),
         );
