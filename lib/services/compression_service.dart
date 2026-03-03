@@ -18,7 +18,14 @@ class CompressionService {
     if (lower.endsWith('.pdf')) {
       return _compressPdf(source, quality: quality);
     }
-    return _optimization.compressImage(source, quality: quality);
+    final compressed = await _optimization.compressImage(
+      source,
+      quality: quality,
+    );
+    if (compressed.path == source.path) {
+      throw StateError('Image compression not supported for this format');
+    }
+    return compressed;
   }
 
   Future<File> _compressPdf(

@@ -68,7 +68,7 @@ class _PdfResultPageState extends State<PdfResultPage> {
             if (widget.onBack != null) {
               widget.onBack!();
             } else {
-              Navigator.of(context).pop();
+              Navigator.of(context).popUntil((route) => route.isFirst);
             }
           },
         ),
@@ -322,7 +322,10 @@ class _PdfResultPageState extends State<PdfResultPage> {
 
       if (!mounted) return;
       await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => OcrToolResultPage(result: result)),
+        MaterialPageRoute(
+          builder: (_) =>
+              OcrToolResultPage(result: result, onBackToHome: widget.onBack),
+        ),
       );
     } finally {
       if (mounted) {

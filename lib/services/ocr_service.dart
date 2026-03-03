@@ -52,6 +52,15 @@ class OcrService {
           candidates.add(textBoost);
           generatedVariants.add(textBoost);
         }
+
+        final upscaled = await _createUpscaledVariant(
+          imageFile,
+          tag: 'ocr_upscaled',
+        );
+        if (upscaled != null) {
+          candidates.add(upscaled);
+          generatedVariants.add(upscaled);
+        }
       }
 
       final seen = <String>{};
@@ -96,7 +105,8 @@ class OcrService {
   Future<OcrResult> _processSingleImage(File imageFile) async {
     final inputImage = InputImage.fromFile(imageFile);
     final recognizedText = await _textRecognizer.processImage(inputImage);
-    final text = _fixCommonWords(_correctOcrErrors(recognizedText.text.trim()));
+    final structuredText = _buildStructuredText(recognizedText);
+    final text = _fixCommonWords(_correctOcrErrors(structuredText));
 
     final blocks = recognizedText.blocks
         .map((block) {
@@ -117,6 +127,22 @@ class OcrService {
       sourcePath: imageFile.path,
       sourceFilter: _inferFilterFromPath(imageFile.path),
     );
+  }
+
+  String _buildStructuredText(RecognizedText recognizedText) {
+    final blocks = <String>[];
+    for (final block in recognizedText.blocks) {
+      final lines = block.lines
+          .map((line) => line.text.trim())
+          .where((line) => line.isNotEmpty)
+          .toList(growable: false);
+      if (lines.isEmpty) continue;
+      blocks.add(lines.join('\n'));
+    }
+    if (blocks.isEmpty) {
+      return recognizedText.text.trim();
+    }
+    return blocks.join('\n\n').trim();
   }
 
   double _scoreRecognizedText(String text, List<TextBlock> blocks) {
@@ -249,6 +275,39 @@ class OcrService {
       image = img.adjustColor(image, contrast: 2.1, brightness: 1.08);
       image = img.gaussianBlur(image, radius: 1);
       image = img.luminanceThreshold(image, threshold: 0.5);
+
+      final tempFile = File(
+        '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',
+      );
+      await tempFile.writeAsBytes(img.encodeJpg(image, quality: 96));
+      return tempFile;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<File?> _createUpscaledVariant(
+    File source, {
+    required String tag,
+  }) async {
+    try {
+      final bytes = await source.readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      image = img.bakeOrientation(image);
+      final longest = image.width > image.height ? image.width : image.height;
+      if (longest < 1800) {
+        final scale = 1800 / longest;
+        image = img.copyResize(
+          image,
+          width: (image.width * scale).round(),
+          height: (image.height * scale).round(),
+          interpolation: img.Interpolation.cubic,
+        );
+      }
+      image = img.grayscale(image);
+      image = img.adjustColor(image, contrast: 1.65, brightness: 1.04);
 
       final tempFile = File(
         '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',

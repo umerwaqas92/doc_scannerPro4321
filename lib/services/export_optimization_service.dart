@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image/image.dart' as img;
 
 enum ExportQualityPreset { high, medium, small }
 
@@ -22,14 +22,26 @@ class ExportOptimizationService {
     ExportQualityPreset quality = ExportQualityPreset.medium,
   }) async {
     try {
-      final outputPath = _buildJpegDerivedPath(source.path, 'compressed');
-      final compressed = await FlutterImageCompress.compressAndGetFile(
-        source.path,
-        outputPath,
-        quality: quality.jpegQuality,
-        format: CompressFormat.jpeg,
+      final sourceBytes = await source.readAsBytes();
+      var decoded = img.decodeImage(sourceBytes);
+      if (decoded == null) {
+        return source;
+      }
+
+      decoded = img.bakeOrientation(decoded);
+      decoded = _resizeForQuality(decoded, quality);
+
+      final outputPath = _buildJpegOutputPath(source.path, 'compressed');
+      final output = File(outputPath);
+      await output.writeAsBytes(
+        img.encodeJpg(decoded, quality: quality.jpegQuality),
+        flush: true,
       );
-      return compressed != null ? File(compressed.path) : source;
+
+      if (!await output.exists()) return source;
+      final outputSize = await output.length();
+      if (outputSize <= 0) return source;
+      return output;
     } catch (_) {
       return source;
     }
@@ -50,9 +62,31 @@ class ExportOptimizationService {
     return result;
   }
 
-  String _buildJpegDerivedPath(String originalPath, String suffix) {
-    final dot = originalPath.lastIndexOf('.');
-    final base = dot == -1 ? originalPath : originalPath.substring(0, dot);
-    return '${base}_$suffix.jpg';
+  img.Image _resizeForQuality(img.Image source, ExportQualityPreset quality) {
+    final maxDimension = switch (quality) {
+      ExportQualityPreset.high => 2200,
+      ExportQualityPreset.medium => 1800,
+      ExportQualityPreset.small => 1400,
+    };
+
+    final longest = source.width > source.height ? source.width : source.height;
+    if (longest <= maxDimension) return source;
+
+    final scale = maxDimension / longest;
+    final width = (source.width * scale).round();
+    final height = (source.height * scale).round();
+    return img.copyResize(
+      source,
+      width: width,
+      height: height,
+      interpolation: img.Interpolation.cubic,
+    );
+  }
+
+  String _buildJpegOutputPath(String originalPath, String suffix) {
+    final fileName = originalPath.split('/').last;
+    final dot = fileName.lastIndexOf('.');
+    final baseName = dot == -1 ? fileName : fileName.substring(0, dot);
+    return '${Directory.systemTemp.path}/${baseName}_${suffix}_${DateTime.now().microsecondsSinceEpoch}.jpg';
   }
 }

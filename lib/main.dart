@@ -60,6 +60,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final ExportService _exportService = ExportService();
   int _currentIndex = 0;
+  String _homeSearchQuery = '';
   bool _showScanner = false;
   bool _showEdit = false;
   bool _showResult = false;
@@ -89,14 +90,12 @@ class _MainScreenState extends State<MainScreen> {
     await appState.initializeCamera();
   }
 
-  void _onDocTap(int docIndex) {
+  void _onDocTap(ScannedDocument document) {
     final appState = context.read<AppState>();
-    if (docIndex < appState.documents.length) {
-      appState.selectDocument(appState.documents[docIndex]);
-      setState(() {
-        _currentIndex = 5;
-      });
-    }
+    appState.selectDocument(document);
+    setState(() {
+      _currentIndex = 5;
+    });
   }
 
   void _onSeeAllTap() {
@@ -263,9 +262,12 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _onResultBack() {
+    context.read<AppState>().clearCapturedImages();
     setState(() {
       _showResult = false;
-      _showEdit = true;
+      _showEdit = false;
+      _showScanner = false;
+      _currentIndex = 0;
     });
   }
 
@@ -386,6 +388,8 @@ class _MainScreenState extends State<MainScreen> {
       await Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => OcrToolResultPage(result: result)),
       );
+      if (!mounted) return;
+      setState(() => _currentIndex = 0);
     } finally {
       tool.dispose();
     }
@@ -453,12 +457,16 @@ class _MainScreenState extends State<MainScreen> {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const PdfMakerPage()));
+    if (!mounted) return;
+    setState(() => _currentIndex = 0);
   }
 
   Future<void> _openOcrTool() async {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const OcrToolInputPage()));
+    if (!mounted) return;
+    setState(() => _currentIndex = 0);
   }
 
   Future<void> _openShareTool() async {
@@ -472,6 +480,20 @@ class _MainScreenState extends State<MainScreen> {
     await Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const CompressorPage()));
+    if (!mounted) return;
+    setState(() => _currentIndex = 0);
+  }
+
+  void _onHomeSearchChanged(String value) {
+    setState(() => _homeSearchQuery = value);
+  }
+
+  List<ScannedDocument> _filteredHomeDocuments(AppState appState) {
+    final query = _homeSearchQuery.trim().toLowerCase();
+    if (query.isEmpty) return appState.documents;
+    return appState.documents
+        .where((doc) => doc.name.toLowerCase().contains(query))
+        .toList(growable: false);
   }
 
   @override
@@ -557,11 +579,12 @@ class _MainScreenState extends State<MainScreen> {
     switch (_currentIndex) {
       case 0:
         return HomePage(
-          documents: appState.documents,
+          documents: _filteredHomeDocuments(appState),
           onScanTap: _onScanTap,
-          onDocTap: (index) => _onDocTap(index),
+          onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          onSearchTap: () {},
+          searchQuery: _homeSearchQuery,
+          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,
@@ -570,7 +593,10 @@ class _MainScreenState extends State<MainScreen> {
       case 1:
         return GalleryPage(
           documents: appState.documents,
-          onDocTap: (index) => _onDocTap(index),
+          onDocTap: (index) {
+            if (index < 0 || index >= appState.documents.length) return;
+            _onDocTap(appState.documents[index]);
+          },
           onMenuTap: () {},
         );
       case 2:
@@ -599,11 +625,12 @@ class _MainScreenState extends State<MainScreen> {
         );
       case 3:
         return HomePage(
-          documents: appState.documents,
+          documents: _filteredHomeDocuments(appState),
           onScanTap: _onScanTap,
-          onDocTap: (index) => _onDocTap(index),
+          onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          onSearchTap: () {},
+          searchQuery: _homeSearchQuery,
+          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,
@@ -642,11 +669,12 @@ class _MainScreenState extends State<MainScreen> {
         );
       default:
         return HomePage(
-          documents: appState.documents,
+          documents: _filteredHomeDocuments(appState),
           onScanTap: _onScanTap,
-          onDocTap: (index) => _onDocTap(index),
+          onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          onSearchTap: () {},
+          searchQuery: _homeSearchQuery,
+          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,

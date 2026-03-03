@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
+import '../services/ocr_service.dart';
 import '../services/ocr_tool_service.dart';
 import '../theme/app_theme.dart';
 
+enum _ReadLayoutMode { clean, raw }
+
 class OcrToolResultPage extends StatefulWidget {
   final OcrToolPageResult result;
+  final VoidCallback? onBackToHome;
 
-  const OcrToolResultPage({super.key, required this.result});
+  const OcrToolResultPage({super.key, required this.result, this.onBackToHome});
 
   @override
   State<OcrToolResultPage> createState() => _OcrToolResultPageState();
@@ -16,21 +20,24 @@ class OcrToolResultPage extends StatefulWidget {
 class _OcrToolResultPageState extends State<OcrToolResultPage> {
   int _currentPage = 0;
   bool _editMode = false;
-  late List<TextEditingController> _controllers;
+  _ReadLayoutMode _readLayoutMode = _ReadLayoutMode.clean;
+  late List<String> _rawTexts;
+  late List<TextEditingController> _cleanControllers;
 
   @override
   void initState() {
     super.initState();
-    _controllers = widget.result.pages
-        .map(
-          (page) => TextEditingController(text: _normalizeForRead(page.text)),
-        )
+    _rawTexts = widget.result.pages
+        .map((page) => _normalizeRaw(_buildRawText(page)))
+        .toList(growable: false);
+    _cleanControllers = _rawTexts
+        .map((raw) => TextEditingController(text: _normalizeForRead(raw)))
         .toList(growable: false);
   }
 
   @override
   void dispose() {
-    for (final c in _controllers) {
+    for (final c in _cleanControllers) {
       c.dispose();
     }
     super.dispose();
@@ -40,12 +47,19 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
   Widget build(BuildContext context) {
     final total = widget.result.pages.length;
     final safePage = total == 0 ? 0 : _currentPage.clamp(0, total - 1);
-    final currentController = total == 0 ? null : _controllers[safePage];
+    final currentController = total == 0 ? null : _cleanControllers[safePage];
+    final pageText = total == 0
+        ? ''
+        : _currentDisplayText(safePage, cleanController: currentController);
 
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bg,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _goHome,
+        ),
         title: const Text('OCR Result'),
       ),
       body: Padding(
@@ -100,6 +114,26 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
                 ),
               ],
             ),
+            if (!_editMode) ...[
+              const SizedBox(height: 8),
+              SegmentedButton<_ReadLayoutMode>(
+                segments: const [
+                  ButtonSegment<_ReadLayoutMode>(
+                    value: _ReadLayoutMode.clean,
+                    label: Text('Clean'),
+                  ),
+                  ButtonSegment<_ReadLayoutMode>(
+                    value: _ReadLayoutMode.raw,
+                    label: Text('Raw'),
+                  ),
+                ],
+                selected: {_readLayoutMode},
+                onSelectionChanged: (selection) {
+                  if (selection.isEmpty) return;
+                  setState(() => _readLayoutMode = selection.first);
+                },
+              ),
+            ],
             const SizedBox(height: 8),
             Expanded(
               child: Container(
@@ -135,12 +169,22 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
                       )
                     : SingleChildScrollView(
                         child: SelectableText(
-                          _normalizeForRead(currentController?.text ?? ''),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            height: 1.65,
+                          pageText,
+                          style: TextStyle(
+                            fontSize: _readLayoutMode == _ReadLayoutMode.raw
+                                ? 15
+                                : 16,
+                            height: _readLayoutMode == _ReadLayoutMode.raw
+                                ? 1.6
+                                : 1.7,
                             color: AppColors.text,
-                            letterSpacing: 0.1,
+                            letterSpacing:
+                                _readLayoutMode == _ReadLayoutMode.raw
+                                ? 0
+                                : 0.1,
+                            fontFamily: _readLayoutMode == _ReadLayoutMode.raw
+                                ? 'monospace'
+                                : null,
                           ),
                           textAlign: TextAlign.left,
                         ),
@@ -200,10 +244,21 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
 
     for (final line in lines) {
       if (line.isEmpty) {
-        if (buffer.isNotEmpty) {
-          paragraphs.add(buffer.toString().trim());
-          buffer.clear();
-        }
+        _flushParagraph(paragraphs, buffer);
+        continue;
+      }
+
+      final isBullet = RegExp(r'^([-*•]|[0-9]+[.)])\s+').hasMatch(line);
+      final isHeading =
+          line.length <= 65 &&
+          RegExp(r'^[A-Z][A-Za-z0-9\s,:-]+$').hasMatch(line);
+      final looksLikeTableRow =
+          RegExp(r'[:|]').hasMatch(line) &&
+          line.split(RegExp(r'\s+')).length >= 3;
+
+      if (isBullet || isHeading || looksLikeTableRow) {
+        _flushParagraph(paragraphs, buffer);
+        paragraphs.add(line);
         continue;
       }
 
@@ -214,35 +269,91 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
 
       final current = buffer.toString();
       final endsSentence = RegExp(r'[.!?;:]$').hasMatch(current);
-      final forceBreak = line.length < 26;
-      if (endsSentence || forceBreak) {
-        paragraphs.add(current.trim());
+      final shortLineBreak =
+          line.length < 24 && !RegExp(r'^[a-z]').hasMatch(line);
+      if (current.endsWith('-')) {
         buffer
           ..clear()
+          ..write(current.substring(0, current.length - 1))
           ..write(line);
+      } else if (endsSentence || shortLineBreak) {
+        _flushParagraph(paragraphs, buffer);
+        buffer.write(line);
       } else {
         buffer.write(' $line');
       }
     }
 
-    if (buffer.isNotEmpty) {
-      paragraphs.add(buffer.toString().trim());
-    }
+    _flushParagraph(paragraphs, buffer);
 
     return paragraphs.join('\n\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
   }
 
+  String _normalizeRaw(String raw) {
+    if (raw.trim().isEmpty) return '';
+    return raw
+        .replaceAll('\r\n', '\n')
+        .split('\n')
+        .map((line) => line.replaceAll(RegExp(r'[ \t]+$'), ''))
+        .join('\n')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
+  }
+
+  String _buildRawText(OcrResult page) {
+    final blocks = page.blocks;
+    if (blocks.isNotEmpty) {
+      final grouped = blocks
+          .map((block) {
+            final lines = block.lines
+                .map((line) => line.replaceAll(RegExp(r'\s+$'), ''))
+                .where((line) => line.trim().isNotEmpty)
+                .toList(growable: false);
+            return lines.join('\n');
+          })
+          .where((blockText) => blockText.trim().isNotEmpty)
+          .toList(growable: false);
+      if (grouped.isNotEmpty) {
+        return grouped.join('\n\n');
+      }
+    }
+    return page.text;
+  }
+
+  String _currentDisplayText(
+    int pageIndex, {
+    required TextEditingController? cleanController,
+  }) {
+    if (_editMode || _readLayoutMode == _ReadLayoutMode.clean) {
+      return _normalizeForRead(cleanController?.text ?? '');
+    }
+    if (pageIndex < _rawTexts.length) {
+      return _normalizeRaw(_rawTexts[pageIndex]);
+    }
+    return '';
+  }
+
   String _allText() {
-    return _controllers
+    if (_readLayoutMode == _ReadLayoutMode.raw && !_editMode) {
+      return _rawTexts
+          .map(_normalizeRaw)
+          .where((text) => text.isNotEmpty)
+          .join('\n\n');
+    }
+    return _cleanControllers
         .map((controller) => _normalizeForRead(controller.text))
         .where((text) => text.isNotEmpty)
         .join('\n\n');
   }
 
   Future<void> _copyCurrent() async {
-    await Clipboard.setData(
-      ClipboardData(text: _normalizeForRead(_controllers[_currentPage].text)),
+    if (_cleanControllers.isEmpty) return;
+    final safePage = _currentPage.clamp(0, _cleanControllers.length - 1);
+    final text = _currentDisplayText(
+      safePage,
+      cleanController: _cleanControllers[safePage],
     );
+    await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -268,5 +379,20 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
       return;
     }
     await Share.share(all, subject: 'OCR Text from DocScan');
+  }
+
+  void _flushParagraph(List<String> paragraphs, StringBuffer buffer) {
+    if (buffer.isEmpty) return;
+    paragraphs.add(buffer.toString().trim());
+    buffer.clear();
+  }
+
+  void _goHome() {
+    if (widget.onBackToHome != null) {
+      Navigator.of(context).pop();
+      widget.onBackToHome!.call();
+      return;
+    }
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 }

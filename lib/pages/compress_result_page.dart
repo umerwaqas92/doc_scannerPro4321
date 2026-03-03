@@ -56,6 +56,10 @@ class _CompressResultPageState extends State<CompressResultPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bg,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _goHome,
+        ),
         title: const Text('Compress Result'),
       ),
       body: Padding(
@@ -250,5 +254,9 @@ class _CompressResultPageState extends State<CompressResultPage> {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  void _goHome() {
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 }

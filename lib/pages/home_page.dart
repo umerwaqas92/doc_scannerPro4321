@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/scanned_document.dart';
 
-class HomePage extends StatelessWidget {
+class HomePage extends StatefulWidget {
   final List<ScannedDocument> documents;
   final VoidCallback onScanTap;
-  final Function(int) onDocTap;
+  final ValueChanged<ScannedDocument> onDocTap;
   final VoidCallback onSeeAllTap;
-  final VoidCallback onSearchTap;
+  final ValueChanged<String> onSearchChanged;
+  final String searchQuery;
   final VoidCallback onPdfToolTap;
   final VoidCallback onOcrToolTap;
   final VoidCallback onShareToolTap;
@@ -19,12 +20,44 @@ class HomePage extends StatelessWidget {
     required this.onScanTap,
     required this.onDocTap,
     required this.onSeeAllTap,
-    required this.onSearchTap,
+    required this.onSearchChanged,
+    required this.searchQuery,
     required this.onPdfToolTap,
     required this.onOcrToolTap,
     required this.onShareToolTap,
     required this.onCompressToolTap,
   });
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  late final TextEditingController _searchController;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController(text: widget.searchQuery);
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.searchQuery != widget.searchQuery &&
+        _searchController.text != widget.searchQuery) {
+      _searchController.value = TextEditingValue(
+        text: widget.searchQuery,
+        selection: TextSelection.collapsed(offset: widget.searchQuery.length),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,8 +83,8 @@ class HomePage extends StatelessWidget {
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'DocScan',
@@ -62,31 +95,48 @@ class HomePage extends StatelessWidget {
               letterSpacing: -0.5,
             ),
           ),
-          Row(children: [_buildIconButton(Icons.search, onSearchTap)]),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _searchController,
+            onChanged: widget.onSearchChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: 'Search documents',
+              prefixIcon: const Icon(Icons.search, color: AppColors.text2),
+              suffixIcon: _searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      onPressed: () {
+                        _searchController.clear();
+                        widget.onSearchChanged('');
+                        setState(() {});
+                      },
+                      icon: const Icon(Icons.close, color: AppColors.text2),
+                    ),
+              filled: true,
+              fillColor: AppColors.surface,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: AppColors.text2),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                vertical: 12,
+                horizontal: 12,
+              ),
+            ),
+          ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildIconButton(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(icon, size: 20, color: AppColors.text),
       ),
     );
   }
 
   Widget _buildScanBanner() {
     return GestureDetector(
-      onTap: onScanTap,
+      onTap: widget.onScanTap,
       child: Container(
         margin: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         padding: const EdgeInsets.all(20),
@@ -158,17 +208,21 @@ class HomePage extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Row(
         children: [
-          _buildQuickAction(Icons.picture_as_pdf, 'PDF', onPdfToolTap),
+          _buildQuickAction(Icons.picture_as_pdf, 'PDF', widget.onPdfToolTap),
           _buildQuickAction(
             Icons.text_snippet_outlined,
             'OCR Text',
-            onOcrToolTap,
+            widget.onOcrToolTap,
           ),
-          _buildQuickAction(Icons.share_outlined, 'Share', onShareToolTap),
+          _buildQuickAction(
+            Icons.share_outlined,
+            'Share',
+            widget.onShareToolTap,
+          ),
           _buildQuickAction(
             Icons.folder_zip_outlined,
             'Compress',
-            onCompressToolTap,
+            widget.onCompressToolTap,
           ),
         ],
       ),
@@ -223,7 +277,7 @@ class HomePage extends StatelessWidget {
             ),
           ),
           GestureDetector(
-            onTap: onSeeAllTap,
+            onTap: widget.onSeeAllTap,
             child: const Text(
               'See all',
               style: TextStyle(
@@ -239,7 +293,8 @@ class HomePage extends StatelessWidget {
   }
 
   Widget _buildDocList() {
-    if (documents.isEmpty) {
+    if (widget.documents.isEmpty) {
+      final isSearching = widget.searchQuery.trim().isNotEmpty;
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Container(
@@ -249,22 +304,24 @@ class HomePage extends StatelessWidget {
             border: Border.all(color: AppColors.border),
             borderRadius: BorderRadius.circular(AppDimens.radiusSm),
           ),
-          child: const Column(
+          child: Column(
             children: [
-              Icon(
+              const Icon(
                 Icons.document_scanner_outlined,
                 size: 48,
                 color: AppColors.text3,
               ),
-              SizedBox(height: 12),
+              const SizedBox(height: 12),
               Text(
-                'No documents yet',
-                style: TextStyle(fontSize: 14, color: AppColors.text2),
+                isSearching ? 'No matching documents' : 'No documents yet',
+                style: const TextStyle(fontSize: 14, color: AppColors.text2),
               ),
-              SizedBox(height: 4),
+              const SizedBox(height: 4),
               Text(
-                'Tap the scan button to get started',
-                style: TextStyle(fontSize: 12, color: AppColors.text3),
+                isSearching
+                    ? 'Try another search keyword'
+                    : 'Tap the scan button to get started',
+                style: const TextStyle(fontSize: 12, color: AppColors.text3),
               ),
             ],
           ),
@@ -272,7 +329,7 @@ class HomePage extends StatelessWidget {
       );
     }
 
-    final recentDocs = documents.take(4).toList();
+    final recentDocs = widget.documents.take(4).toList(growable: false);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -282,10 +339,9 @@ class HomePage extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _buildDocCard(
-              doc.name,
-              '${doc.formattedDate} · ${doc.pageCount} page${doc.pageCount > 1 ? 's' : ''} · ${doc.formattedSize}',
-              doc.isPdf,
-              index,
+              document: doc,
+              meta:
+                  '${doc.formattedDate} · ${doc.pageCount} page${doc.pageCount > 1 ? 's' : ''} · ${doc.formattedSize}',
             ),
           );
         }),
@@ -293,9 +349,12 @@ class HomePage extends StatelessWidget {
     );
   }
 
-  Widget _buildDocCard(String name, String meta, bool isPdf, int index) {
+  Widget _buildDocCard({
+    required ScannedDocument document,
+    required String meta,
+  }) {
     return GestureDetector(
-      onTap: () => onDocTap(index),
+      onTap: () => widget.onDocTap(document),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -314,7 +373,7 @@ class HomePage extends StatelessWidget {
                 border: Border.all(color: AppColors.border),
               ),
               child: Icon(
-                isPdf ? Icons.picture_as_pdf : Icons.image,
+                document.isPdf ? Icons.picture_as_pdf : Icons.image,
                 size: 22,
                 color: AppColors.text3,
               ),
@@ -325,7 +384,7 @@ class HomePage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name,
+                    document.name,
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w500,
@@ -348,20 +407,22 @@ class HomePage extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: isPdf ? AppColors.pdfRed : AppColors.jpgBlue,
+                color: document.isPdf ? AppColors.pdfRed : AppColors.jpgBlue,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: isPdf
+                  color: document.isPdf
                       ? const Color(0xFFF5C0BB)
                       : const Color(0xFFB9D8F0),
                 ),
               ),
               child: Text(
-                isPdf ? 'PDF' : 'JPG',
+                document.isPdf ? 'PDF' : 'JPG',
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
-                  color: isPdf ? AppColors.pdfRedText : AppColors.jpgBlueText,
+                  color: document.isPdf
+                      ? AppColors.pdfRedText
+                      : AppColors.jpgBlueText,
                   fontFamily: 'monospace',
                 ),
               ),
