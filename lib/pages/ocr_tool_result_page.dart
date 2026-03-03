@@ -15,13 +15,16 @@ class OcrToolResultPage extends StatefulWidget {
 
 class _OcrToolResultPageState extends State<OcrToolResultPage> {
   int _currentPage = 0;
+  bool _editMode = false;
   late List<TextEditingController> _controllers;
 
   @override
   void initState() {
     super.initState();
     _controllers = widget.result.pages
-        .map((page) => TextEditingController(text: page.text))
+        .map(
+          (page) => TextEditingController(text: _normalizeForRead(page.text)),
+        )
         .toList(growable: false);
   }
 
@@ -57,32 +60,51 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
               style: const TextStyle(color: AppColors.text2),
             ),
             const SizedBox(height: 8),
-            if (total > 1)
-              Row(
-                children: [
-                  const Text('Page:', style: TextStyle(color: AppColors.text2)),
-                  const SizedBox(width: 8),
-                  DropdownButton<int>(
-                    value: safePage,
-                    items: List.generate(
-                      total,
-                      (index) => DropdownMenuItem<int>(
-                        value: index,
-                        child: Text('Page ${index + 1}'),
+            Row(
+              children: [
+                if (total > 1)
+                  Row(
+                    children: [
+                      const Text(
+                        'Page:',
+                        style: TextStyle(color: AppColors.text2),
                       ),
-                    ),
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => _currentPage = value);
-                    },
+                      const SizedBox(width: 8),
+                      DropdownButton<int>(
+                        value: safePage,
+                        items: List.generate(
+                          total,
+                          (index) => DropdownMenuItem<int>(
+                            value: index,
+                            child: Text('Page ${index + 1}'),
+                          ),
+                        ),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() => _currentPage = value);
+                        },
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                const Spacer(),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(value: false, label: Text('Read')),
+                    ButtonSegment<bool>(value: true, label: Text('Edit')),
+                  ],
+                  selected: {_editMode},
+                  onSelectionChanged: (selection) {
+                    if (selection.isEmpty) return;
+                    setState(() => _editMode = selection.first);
+                  },
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             Expanded(
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
@@ -95,14 +117,32 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
                           style: TextStyle(color: AppColors.text2),
                         ),
                       )
-                    : TextField(
+                    : _editMode
+                    ? TextField(
                         controller: currentController,
                         maxLines: null,
                         expands: true,
                         textAlignVertical: TextAlignVertical.top,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          height: 1.55,
+                          color: AppColors.text,
+                        ),
                         decoration: const InputDecoration(
                           border: InputBorder.none,
                           hintText: 'No text detected',
+                        ),
+                      )
+                    : SingleChildScrollView(
+                        child: SelectableText(
+                          _normalizeForRead(currentController?.text ?? ''),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            height: 1.65,
+                            color: AppColors.text,
+                            letterSpacing: 0.1,
+                          ),
+                          textAlign: TextAlign.left,
                         ),
                       ),
               ),
@@ -147,16 +187,61 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     );
   }
 
+  String _normalizeForRead(String raw) {
+    if (raw.trim().isEmpty) return '';
+    final lines = raw
+        .replaceAll('\r\n', '\n')
+        .split('\n')
+        .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .toList(growable: false);
+
+    final paragraphs = <String>[];
+    final buffer = StringBuffer();
+
+    for (final line in lines) {
+      if (line.isEmpty) {
+        if (buffer.isNotEmpty) {
+          paragraphs.add(buffer.toString().trim());
+          buffer.clear();
+        }
+        continue;
+      }
+
+      if (buffer.isEmpty) {
+        buffer.write(line);
+        continue;
+      }
+
+      final current = buffer.toString();
+      final endsSentence = RegExp(r'[.!?;:]$').hasMatch(current);
+      final forceBreak = line.length < 26;
+      if (endsSentence || forceBreak) {
+        paragraphs.add(current.trim());
+        buffer
+          ..clear()
+          ..write(line);
+      } else {
+        buffer.write(' $line');
+      }
+    }
+
+    if (buffer.isNotEmpty) {
+      paragraphs.add(buffer.toString().trim());
+    }
+
+    return paragraphs.join('\n\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
+  }
+
   String _allText() {
     return _controllers
-        .map((controller) => controller.text.trim())
+        .map((controller) => _normalizeForRead(controller.text))
         .where((text) => text.isNotEmpty)
         .join('\n\n');
   }
 
   Future<void> _copyCurrent() async {
     await Clipboard.setData(
-      ClipboardData(text: _controllers[_currentPage].text),
+      ClipboardData(text: _normalizeForRead(_controllers[_currentPage].text)),
     );
     if (!mounted) return;
     ScaffoldMessenger.of(

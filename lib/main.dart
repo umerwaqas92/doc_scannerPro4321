@@ -455,12 +455,8 @@ class _MainScreenState extends State<MainScreen> {
         return SettingsPage(
           autoCrop: appState.autoCrop,
           flashMode: appState.flashMode,
-          defaultFormat: appState.defaultFormat,
-          cloudBackup: appState.cloudBackup,
           onAutoCropChanged: (value) => appState.setAutoCrop(value),
           onFlashModeChanged: (value) => appState.setFlashMode(value),
-          onDefaultFormatChanged: (value) => appState.setDefaultFormat(value),
-          onCloudBackupChanged: (value) => appState.setCloudBackup(value),
         );
       case 5:
         return DocViewPage(

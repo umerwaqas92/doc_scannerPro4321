@@ -11,6 +11,7 @@ import '../services/ocr_service.dart';
 import '../services/scan_pipeline_service.dart';
 import '../services/export_optimization_service.dart';
 import '../services/export_service.dart';
+import 'package:image/image.dart' as img;
 
 class AppState extends ChangeNotifier {
   final StorageService _storageService = StorageService();
@@ -340,8 +341,19 @@ class AppState extends ChangeNotifier {
         images,
         quality: ExportQualityPreset.medium,
       );
-      final fileName = '${name}_${DateTime.now().millisecondsSinceEpoch}';
-      final doc = await _pdfService.createPdfFromImages(optimized, fileName);
+      var validImages = await _filterValidImages(optimized);
+      if (validImages.isEmpty) {
+        validImages = await _filterValidImages(images);
+      }
+      if (validImages.isEmpty) {
+        _setLoading(false);
+        notifyListeners();
+        return null;
+      }
+
+      final safeName = _sanitizeFileName(name);
+      final fileName = '${safeName}_${DateTime.now().millisecondsSinceEpoch}';
+      final doc = await _pdfService.createPdfFromImages(validImages, fileName);
       await _storageService.saveDocument(doc);
       _documents.insert(0, doc);
       _setLoading(false);
@@ -514,6 +526,29 @@ class AppState extends ChangeNotifier {
     if (lower.endsWith('.jpg')) return '.jpg';
     if (lower.endsWith('.webp')) return '.webp';
     return '.jpg';
+  }
+
+  Future<List<File>> _filterValidImages(List<File> sources) async {
+    final valid = <File>[];
+    for (final file in sources) {
+      try {
+        if (!await file.exists()) continue;
+        final bytes = await file.readAsBytes();
+        final decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          valid.add(file);
+        }
+      } catch (_) {}
+    }
+    return valid;
+  }
+
+  String _sanitizeFileName(String input) {
+    final cleaned = input
+        .trim()
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), '_');
+    return cleaned.isEmpty ? 'PDF' : cleaned;
   }
 }
 

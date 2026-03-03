@@ -4,23 +4,15 @@ import '../theme/app_theme.dart';
 class SettingsPage extends StatelessWidget {
   final bool autoCrop;
   final String flashMode;
-  final String defaultFormat;
-  final bool cloudBackup;
   final Function(bool) onAutoCropChanged;
   final Function(String) onFlashModeChanged;
-  final Function(String) onDefaultFormatChanged;
-  final Function(bool) onCloudBackupChanged;
 
   const SettingsPage({
     super.key,
     required this.autoCrop,
     required this.flashMode,
-    required this.defaultFormat,
-    required this.cloudBackup,
     required this.onAutoCropChanged,
     required this.onFlashModeChanged,
-    required this.onDefaultFormatChanged,
-    required this.onCloudBackupChanged,
   });
 
   @override
@@ -41,25 +33,10 @@ class SettingsPage extends StatelessWidget {
                 onAutoCropChanged,
               ),
               _buildValueRow(Icons.wb_sunny_outlined, 'Flash Mode', flashMode),
-              _buildValueRow(
-                Icons.picture_as_pdf_outlined,
-                'Default Format',
-                defaultFormat,
-              ),
-            ]),
-            _buildSection('Storage', [
-              _buildToggleRow(
-                Icons.cloud_upload_outlined,
-                'Cloud Backup',
-                'Auto-save to cloud',
-                cloudBackup,
-                onCloudBackupChanged,
-              ),
-              _buildValueRow(Icons.storage_outlined, 'Storage Used', '48 MB'),
             ]),
             _buildSection('Account', [
-              _buildNavRow(Icons.person_outline, 'Profile'),
               _buildNavRow(Icons.security_outlined, 'Privacy & Security'),
+              _buildNavRow(Icons.gavel_outlined, 'Terms and Conditions'),
             ]),
             const SizedBox(height: 20),
           ],
@@ -175,7 +152,7 @@ class SettingsPage extends StatelessWidget {
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.2),
+                        color: Colors.black.withValues(alpha: 0.2),
                         blurRadius: 4,
                       ),
                     ],

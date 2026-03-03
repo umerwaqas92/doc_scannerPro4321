@@ -21,14 +21,18 @@ class ExportOptimizationService {
     File source, {
     ExportQualityPreset quality = ExportQualityPreset.medium,
   }) async {
-    final outputPath = _buildDerivedPath(source.path, 'compressed');
-    final compressed = await FlutterImageCompress.compressAndGetFile(
-      source.path,
-      outputPath,
-      quality: quality.jpegQuality,
-      format: CompressFormat.jpeg,
-    );
-    return compressed != null ? File(compressed.path) : source;
+    try {
+      final outputPath = _buildJpegDerivedPath(source.path, 'compressed');
+      final compressed = await FlutterImageCompress.compressAndGetFile(
+        source.path,
+        outputPath,
+        quality: quality.jpegQuality,
+        format: CompressFormat.jpeg,
+      );
+      return compressed != null ? File(compressed.path) : source;
+    } catch (_) {
+      return source;
+    }
   }
 
   Future<List<File>> compressBatch(
@@ -37,14 +41,18 @@ class ExportOptimizationService {
   }) async {
     final result = <File>[];
     for (final file in sources) {
-      result.add(await compressImage(file, quality: quality));
+      try {
+        result.add(await compressImage(file, quality: quality));
+      } catch (_) {
+        result.add(file);
+      }
     }
     return result;
   }
 
-  String _buildDerivedPath(String originalPath, String suffix) {
+  String _buildJpegDerivedPath(String originalPath, String suffix) {
     final dot = originalPath.lastIndexOf('.');
-    if (dot == -1) return '${originalPath}_$suffix.jpg';
-    return '${originalPath.substring(0, dot)}_$suffix${originalPath.substring(dot)}';
+    final base = dot == -1 ? originalPath : originalPath.substring(0, dot);
+    return '${base}_$suffix.jpg';
   }
 }

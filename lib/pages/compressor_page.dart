@@ -158,6 +158,9 @@ class _CompressorPageState extends State<CompressorPage> {
         selected.file,
         quality: _quality,
       );
+      if (out.path == selected.file.path) {
+        throw Exception('Unsupported image format for compression');
+      }
       final outSize = await out.length();
       if (!mounted) return;
       final appState = context.read<AppState>();
@@ -177,9 +180,12 @@ class _CompressorPageState extends State<CompressorPage> {
       );
     } catch (e) {
       if (!mounted) return;
+      final message = e.toString().toLowerCase().contains('jpg')
+          ? 'Compression failed. Unsupported image format.'
+          : 'Compression failed: $e';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Compression failed: $e')));
+      ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
       if (mounted) {
         setState(() => _processing = false);

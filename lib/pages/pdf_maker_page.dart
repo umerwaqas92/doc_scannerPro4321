@@ -182,9 +182,11 @@ class _PdfMakerPageState extends State<PdfMakerPage> {
         );
         Navigator.of(context).pop();
       } else {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Failed to create PDF')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to create PDF. No valid images found.'),
+          ),
+        );
       }
     } finally {
       if (mounted) {
