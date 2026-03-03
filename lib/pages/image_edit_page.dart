@@ -37,6 +37,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
   late List<EditSessionState> _sessions;
   late List<int> _previewTokens;
   late List<int> _renderInFlightCounts;
+  late List<String?> _lastPreviewSignatures;
   Timer? _previewDebounce;
 
   @override
@@ -61,6 +62,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
     _renderedOutputs = List<File?>.from(_previewImages);
     _previewTokens = List<int>.filled(widget.images.length, 0);
     _renderInFlightCounts = List<int>.filled(widget.images.length, 0);
+    _lastPreviewSignatures = List<String?>.filled(widget.images.length, null);
   }
 
   @override
@@ -507,6 +509,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
     setState(() {
       _sessions[_currentPage] = updated.copyWith(clearOutputFile: true);
       _renderedOutputs[_currentPage] = null;
+      _lastPreviewSignatures[_currentPage] = null;
       _dirtyPages.add(_currentPage);
     });
   }
@@ -514,7 +517,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
   void _schedulePreviewApply() {
     final pageIndex = _currentPage;
     _previewDebounce?.cancel();
-    _previewDebounce = Timer(const Duration(milliseconds: 180), () async {
+    _previewDebounce = Timer(const Duration(milliseconds: 260), () async {
       if (!mounted) return;
       await _renderPagePreview(pageIndex);
     });
@@ -551,19 +554,26 @@ class _ImageEditPageState extends State<ImageEditPage> {
 
   Future<void> _renderPagePreview(int index) async {
     if (index < 0 || index >= _sessions.length) return;
+    final signature = _buildPreviewSignature(index);
+    if (_lastPreviewSignatures[index] == signature &&
+        _renderedOutputs[index] != null) {
+      return;
+    }
+
     final token = ++_previewTokens[index];
     _incrementRenderCount(index);
     try {
       final rendered = await _renderAdjustedFile(
         index,
         tagPrefix: 'preview',
-        maxDimension: 1700,
-        quality: 90,
+        maxDimension: 1200,
+        quality: 82,
       );
       if (!mounted || token != _previewTokens[index]) return;
       setState(() {
         _previewImages[index] = rendered;
         _renderedOutputs[index] = rendered;
+        _lastPreviewSignatures[index] = signature;
       });
     } finally {
       _decrementRenderCount(index);
@@ -614,6 +624,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
       setState(() {
         _previewImages[index] = rendered;
         _renderedOutputs[index] = rendered;
+        _lastPreviewSignatures[index] = null;
         _sessions[index] = _sessions[index].copyWith(outputFile: rendered);
         _dirtyPages.remove(index);
       });
@@ -676,6 +687,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
       setState(() {
         _manualPerspectiveBases[index] = warped;
         _renderedOutputs[index] = null;
+        _lastPreviewSignatures[index] = null;
         _sessions[index] = _sessions[index].copyWith(clearOutputFile: true);
         _dirtyPages.add(index);
       });
@@ -709,5 +721,22 @@ class _ImageEditPageState extends State<ImageEditPage> {
         setState(() => _isCommitting = false);
       }
     }
+  }
+
+  String _buildPreviewSignature(int index) {
+    final session = _sessions[index];
+    final pipeline = index < widget.pipelineResults.length
+        ? widget.pipelineResults[index]
+        : null;
+    final manualBase = _manualPerspectiveBases[index];
+    final basePath =
+        (manualBase ?? pipeline?.croppedFile ?? widget.images[index]).path;
+    return [
+      basePath,
+      session.filterMode.name,
+      session.brightness.toStringAsFixed(3),
+      session.contrast.toStringAsFixed(3),
+      session.rotation.toStringAsFixed(1),
+    ].join('|');
   }
 }

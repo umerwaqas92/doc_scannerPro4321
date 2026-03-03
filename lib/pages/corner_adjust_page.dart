@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
 import '../models/scan_pipeline_models.dart';
+import '../services/open_cv_document_analyzer.dart';
 import '../theme/app_theme.dart';
 
 class CornerAdjustPage extends StatefulWidget {
@@ -20,9 +21,14 @@ class CornerAdjustPage extends StatefulWidget {
 }
 
 class _CornerAdjustPageState extends State<CornerAdjustPage> {
+  static const double _autoDetectMinConfidence = 0.35;
+  final OpenCvDocumentAnalyzer _analyzer = OpenCvDocumentAnalyzer();
   Size? _imageSize;
   late List<ScanCorner> _corners;
   bool _loading = true;
+  bool _detectingAuto = false;
+  double? _lastDetectConfidence;
+  bool _lastDetectFallback = false;
 
   @override
   void initState() {
@@ -51,6 +57,7 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
           _loading = false;
         });
       }
+      await _runAutoDetect(showFeedback: false);
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -89,6 +96,48 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
     return [top[0], top[1], bottom[1], bottom[0]];
   }
 
+  Future<void> _runAutoDetect({required bool showFeedback}) async {
+    if (_detectingAuto || _imageSize == null) return;
+    setState(() => _detectingAuto = true);
+    try {
+      final detected = await _analyzer.detectDocument(
+        widget.imageFile,
+        minConfidence: _autoDetectMinConfidence,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _lastDetectConfidence = detected.confidence;
+        _lastDetectFallback = detected.isFallback;
+      });
+
+      if (!detected.isFallback && detected.corners.length == 4) {
+        setState(() {
+          _corners = _normalizeCorners(detected.corners, _imageSize!);
+        });
+        if (showFeedback) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Corners auto-detected')),
+          );
+        }
+      } else if (showFeedback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Auto detect failed. Adjust manually.')),
+        );
+      }
+    } catch (_) {
+      if (!mounted || !showFeedback) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Auto detect failed. Try again.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _detectingAuto = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -98,7 +147,7 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
         title: const Text('Adjust Corners'),
         actions: [
           TextButton(
-            onPressed: _loading ? null : () => Navigator.pop(context, _corners),
+            onPressed: _loading ? null : _applyAndClose,
             child: const Text(
               'Apply',
               style: TextStyle(fontWeight: FontWeight.bold),
@@ -193,10 +242,31 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
                     ),
                   ),
                 ),
+                _buildAutoDetectStatus(),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   child: Row(
                     children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _detectingAuto
+                              ? null
+                              : () => _runAutoDetect(showFeedback: true),
+                          icon: _detectingAuto
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.auto_fix_high),
+                          label: Text(
+                            _detectingAuto ? 'Detecting...' : 'Auto Detect',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
                       Expanded(
                         child: OutlinedButton(
                           onPressed: () {
@@ -211,7 +281,7 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () => Navigator.pop(context, _corners),
+                          onPressed: _applyAndClose,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.text,
                             foregroundColor: Colors.white,
@@ -224,6 +294,53 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
                 ),
               ],
             ),
+    );
+  }
+
+  void _applyAndClose() {
+    if (_imageSize == null) {
+      Navigator.pop(context, _corners);
+      return;
+    }
+    final normalized = _normalizeCorners(_corners, _imageSize!);
+    Navigator.pop(context, normalized);
+  }
+
+  Widget _buildAutoDetectStatus() {
+    if (_lastDetectConfidence == null) return const SizedBox(height: 8);
+    final confidencePct = (_lastDetectConfidence! * 100).clamp(0, 100).round();
+    final success = !_lastDetectFallback && _lastDetectConfidence! >= 0.55;
+    final medium = !_lastDetectFallback && _lastDetectConfidence! >= 0.35;
+    final color = success
+        ? Colors.green
+        : medium
+        ? Colors.orange
+        : Colors.redAccent;
+    final text = success
+        ? 'Auto detect: Good ($confidencePct%)'
+        : medium
+        ? 'Auto detect: Medium ($confidencePct%)'
+        : 'Auto detect: Low ($confidencePct%) - adjust manually';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
     );
   }
 }

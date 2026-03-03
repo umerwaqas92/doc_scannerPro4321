@@ -245,8 +245,8 @@ class ScanPipelineService {
     int mappedBottom = (bottom * scaleY).round();
 
     // Keep a safety margin so auto-crop does not trim text near edges.
-    final marginX = (decoded.width * 0.02).round();
-    final marginY = (decoded.height * 0.02).round();
+    final marginX = (decoded.width * 0.012).round();
+    final marginY = (decoded.height * 0.012).round();
     mappedLeft = (mappedLeft - marginX).clamp(0, decoded.width - 1);
     mappedRight = (mappedRight + marginX).clamp(0, decoded.width - 1);
     mappedTop = (mappedTop - marginY).clamp(0, decoded.height - 1);
@@ -255,9 +255,9 @@ class ScanPipelineService {
     final cropWidth = mappedRight - mappedLeft + 1;
     final cropHeight = mappedBottom - mappedTop + 1;
     final enoughArea =
-        cropWidth > decoded.width * 0.62 && cropHeight > decoded.height * 0.62;
+        cropWidth > decoded.width * 0.5 && cropHeight > decoded.height * 0.5;
 
-    final result = enoughArea
+    final coarseCropped = enoughArea
         ? img.copyCrop(
             decoded,
             x: mappedLeft,
@@ -266,10 +266,82 @@ class ScanPipelineService {
             height: cropHeight,
           )
         : decoded;
+    final result = _trimNearWhiteBorder(coarseCropped);
 
     final output = File(_buildDerivedPath(file.path, 'cropped'));
     await output.writeAsBytes(img.encodeJpg(result, quality: 90));
     return output;
+  }
+
+  img.Image _trimNearWhiteBorder(img.Image source) {
+    final width = source.width;
+    final height = source.height;
+    if (width < 30 || height < 30) return source;
+
+    final maxTrimX = (width * 0.08).round();
+    final maxTrimY = (height * 0.08).round();
+    final minDarkInCol = (height * 0.012).round().clamp(2, height);
+    final minDarkInRow = (width * 0.012).round().clamp(2, width);
+
+    bool looksWhiteColumn(int x) {
+      int dark = 0;
+      for (int y = 0; y < height; y++) {
+        final luma = source.getPixel(x, y).luminance;
+        if (luma < 240) {
+          dark++;
+          if (dark >= minDarkInCol) return false;
+        }
+      }
+      return true;
+    }
+
+    bool looksWhiteRow(int y) {
+      int dark = 0;
+      for (int x = 0; x < width; x++) {
+        final luma = source.getPixel(x, y).luminance;
+        if (luma < 240) {
+          dark++;
+          if (dark >= minDarkInRow) return false;
+        }
+      }
+      return true;
+    }
+
+    int left = 0;
+    int right = width - 1;
+    int top = 0;
+    int bottom = height - 1;
+
+    while (left < right && left < maxTrimX && looksWhiteColumn(left)) {
+      left++;
+    }
+    while (right > left &&
+        (width - 1 - right) < maxTrimX &&
+        looksWhiteColumn(right)) {
+      right--;
+    }
+    while (top < bottom && top < maxTrimY && looksWhiteRow(top)) {
+      top++;
+    }
+    while (bottom > top &&
+        (height - 1 - bottom) < maxTrimY &&
+        looksWhiteRow(bottom)) {
+      bottom--;
+    }
+
+    final trimmedWidth = right - left + 1;
+    final trimmedHeight = bottom - top + 1;
+    if (trimmedWidth <= width * 0.82 || trimmedHeight <= height * 0.82) {
+      return source;
+    }
+
+    return img.copyCrop(
+      source,
+      x: left,
+      y: top,
+      width: trimmedWidth,
+      height: trimmedHeight,
+    );
   }
 
   Future<Map<DocumentFilterMode, File>> _buildEnhancementVariants(

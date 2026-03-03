@@ -184,8 +184,7 @@ class DocumentScannerService {
 
   String _getAdjustedPath(String originalPath, {String? tag}) {
     final lastDot = originalPath.lastIndexOf('.');
-    final safeTag =
-        (tag == null || tag.trim().isEmpty)
+    final safeTag = (tag == null || tag.trim().isEmpty)
         ? DateTime.now().microsecondsSinceEpoch.toString()
         : tag.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
     if (lastDot == -1) {
@@ -229,7 +228,12 @@ class DocumentScannerService {
       final decoded = img.decodeImage(bytes);
       if (decoded == null) return imageFile;
 
-      final warped = _applyPerspectiveCorrection(decoded, corners);
+      final ordered = _orderPerspectiveCorners(
+        corners,
+        decoded.width,
+        decoded.height,
+      );
+      final warped = _applyPerspectiveCorrection(decoded, ordered);
       final outputPath = _buildDerivedPath(imageFile.path, suffix);
       final outputFile = File(outputPath);
       await outputFile.writeAsBytes(img.encodeJpg(warped, quality: 95));
@@ -244,6 +248,34 @@ class DocumentScannerService {
     final dot = originalPath.lastIndexOf('.');
     if (dot == -1) return '${originalPath}_$suffix.jpg';
     return '${originalPath.substring(0, dot)}_$suffix${originalPath.substring(dot)}';
+  }
+
+  List<ScanPoint> _orderPerspectiveCorners(
+    List<ScanPoint> corners,
+    int width,
+    int height,
+  ) {
+    if (corners.length != 4) return corners;
+
+    final clamped = corners
+        .map(
+          (p) => ScanPoint(
+            p.x.clamp(0, width.toDouble()),
+            p.y.clamp(0, height.toDouble()),
+          ),
+        )
+        .toList(growable: false);
+
+    final sorted = List<ScanPoint>.from(clamped)
+      ..sort((a, b) => a.y.compareTo(b.y));
+    final top = sorted.take(2).toList()..sort((a, b) => a.x.compareTo(b.x));
+    final bottom = sorted.skip(2).toList()..sort((a, b) => a.x.compareTo(b.x));
+    final ordered = [top[0], top[1], bottom[1], bottom[0]];
+
+    if (!_isValidQuadrilateral(ordered)) {
+      return _getDefaultEdges(width, height);
+    }
+    return ordered;
   }
 
   static img.Image _preprocessResize(img.Image image, int maxHeight) {
