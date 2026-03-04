@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -14,6 +15,13 @@ class SettingsPage extends StatelessWidget {
     required this.onAutoCropChanged,
     required this.onFlashModeChanged,
   });
+
+  Future<void> _launchURL(String urlString) async {
+    final Uri url = Uri.parse(urlString);
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      throw Exception('Could not launch $url');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,8 +43,22 @@ class SettingsPage extends StatelessWidget {
               _buildValueRow(Icons.wb_sunny_outlined, 'Flash Mode', flashMode),
             ]),
             _buildSection('Account', [
-              _buildNavRow(Icons.security_outlined, 'Privacy & Security'),
-              _buildNavRow(Icons.gavel_outlined, 'Terms and Conditions'),
+              _buildNavRow(
+                Icons.security_outlined,
+                'Privacy Policy',
+                onTap:
+                    () => _launchURL(
+                      'https://www.freeprivacypolicy.com/live/0af5bf0f-a559-468c-bb51-e5cfabcc41a4',
+                    ),
+              ),
+              _buildNavRow(
+                Icons.gavel_outlined,
+                'Terms and Conditions',
+                onTap:
+                    () => _launchURL(
+                      'https://www.freeprivacypolicy.com/live/6acd82b0-38ff-45dc-901f-5e39e4eabe6f',
+                    ),
+              ),
             ]),
             const SizedBox(height: 20),
           ],
@@ -206,33 +228,36 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  Widget _buildNavRow(IconData icon, String label) {
-    return Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.surface2,
-              borderRadius: BorderRadius.circular(9),
+  Widget _buildNavRow(IconData icon, String label, {VoidCallback? onTap}) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: AppColors.surface2,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              child: Icon(icon, size: 16, color: AppColors.text),
             ),
-            child: Icon(icon, size: 16, color: AppColors.text),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.text,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.text,
+                ),
               ),
             ),
-          ),
-          const Icon(Icons.chevron_right, size: 16, color: AppColors.text3),
-        ],
+            const Icon(Icons.chevron_right, size: 16, color: AppColors.text3),
+          ],
+        ),
       ),
     );
   }
