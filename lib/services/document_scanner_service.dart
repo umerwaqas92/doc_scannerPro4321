@@ -1941,8 +1941,8 @@ class DocumentScannerService {
         final srcY = srcCoords[1];
 
         if (srcX >= 0 && srcX < src.width && srcY >= 0 && srcY < src.height) {
-          final pixel = _bilinearInterpolate(src, srcX, srcY);
-          output.setPixel(x, y, pixel);
+          final color = _bilinearInterpolate(src, srcX, srcY);
+          output.setPixel(x, y, color);
         }
       }
     }
@@ -2087,7 +2087,7 @@ class DocumentScannerService {
     ];
   }
 
-  img.Pixel _bilinearInterpolate(img.Image src, double x, double y) {
+  img.Color _bilinearInterpolate(img.Image src, double x, double y) {
     final x0 = x.floor();
     final y0 = y.floor();
     final x1 = x0 + 1;
@@ -2138,7 +2138,7 @@ class DocumentScannerService {
       yRatio,
     );
 
-    return img.ColorRgb8(r.toInt(), g.toInt(), b.toInt()) as img.Pixel;
+    return img.ColorRgb8(r.toInt(), g.toInt(), b.toInt());
   }
 
   double _interpolate(

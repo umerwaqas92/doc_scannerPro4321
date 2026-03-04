@@ -19,15 +19,29 @@ class PdfProcessingService {
     }
   }
 
+  Future<Uint8List?> renderFirstPageSafe(File pdfFile) async {
+    final attempts = <double>[130, 96, 72];
+    for (final dpi in attempts) {
+      final bytes = await renderFirstPage(pdfFile, dpi: dpi);
+      if (bytes != null) return bytes;
+    }
+    return null;
+  }
+
   Future<List<Uint8List>> renderAllPages(
     File pdfFile, {
     double dpi = 130,
   }) async {
     final pages = <Uint8List>[];
     try {
+      if (!await pdfFile.exists()) return [];
       final bytes = await pdfFile.readAsBytes();
+      if (bytes.isEmpty) return [];
       await for (final page in Printing.raster(bytes, dpi: dpi)) {
-        pages.add(await page.toPng());
+        final png = await page.toPng();
+        if (png.isNotEmpty) {
+          pages.add(png);
+        }
       }
     } catch (_) {}
     return pages;

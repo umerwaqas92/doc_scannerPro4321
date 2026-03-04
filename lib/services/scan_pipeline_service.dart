@@ -343,34 +343,70 @@ class ScanPipelineService {
     final grayscale = img.grayscale(working);
     final grayscaleFile = File(_buildDerivedPath(source.path, 'grayscale'));
     await grayscaleFile.writeAsBytes(img.encodeJpg(grayscale, quality: 88));
-    variants[DocumentFilterMode.grayscale] = grayscaleFile;
+    if (await _isGoodResult(grayscaleFile)) {
+      variants[DocumentFilterMode.grayscale] = grayscaleFile;
+    }
 
     final bw = _toStrongBlackWhite(grayscale);
     final bwFile = File(_buildDerivedPath(source.path, 'bw'));
     await bwFile.writeAsBytes(img.encodeJpg(bw, quality: 88));
-    variants[DocumentFilterMode.blackWhite] = bwFile;
+    if (await _isGoodResult(bwFile)) {
+      variants[DocumentFilterMode.blackWhite] = bwFile;
+    }
 
     final colorEnhanced = _enhanceColorDocument(working);
     final colorFile = File(_buildDerivedPath(source.path, 'color_plus'));
     await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 88));
-    variants[DocumentFilterMode.colorEnhanced] = colorFile;
+    if (await _isGoodResult(colorFile)) {
+      variants[DocumentFilterMode.colorEnhanced] = colorFile;
+    }
 
     final textPlus = _highContrastText(working);
     final textPlusFile = File(_buildDerivedPath(source.path, 'text_plus'));
     await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 88));
-    variants[DocumentFilterMode.highContrastText] = textPlusFile;
+    if (await _isGoodResult(textPlusFile)) {
+      variants[DocumentFilterMode.highContrastText] = textPlusFile;
+    }
 
     final warm = _warmPaper(working);
     final warmFile = File(_buildDerivedPath(source.path, 'warm_paper'));
     await warmFile.writeAsBytes(img.encodeJpg(warm, quality: 88));
-    variants[DocumentFilterMode.warmPaper] = warmFile;
+    if (await _isGoodResult(warmFile)) {
+      variants[DocumentFilterMode.warmPaper] = warmFile;
+    }
 
     final photo = _photoNatural(working);
     final photoFile = File(_buildDerivedPath(source.path, 'photo_natural'));
     await photoFile.writeAsBytes(img.encodeJpg(photo, quality: 88));
-    variants[DocumentFilterMode.photoNatural] = photoFile;
+    if (await _isGoodResult(photoFile)) {
+      variants[DocumentFilterMode.photoNatural] = photoFile;
+    }
 
     return variants;
+  }
+
+  Future<bool> _isGoodResult(File file) async {
+    try {
+      if (!await file.exists()) return false;
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return false;
+
+      // Check if image is mostly black (mean luminance < 5%)
+      double sum = 0;
+      int count = 0;
+      final step = (decoded.width ~/ 20).clamp(1, 20);
+      for (int y = 0; y < decoded.height; y += step) {
+        for (int x = 0; x < decoded.width; x += step) {
+          sum += decoded.getPixel(x, y).luminance;
+          count++;
+        }
+      }
+      final mean = sum / count;
+      return mean > 12; // At least some content (12/255 ~= 5%)
+    } catch (_) {
+      return false;
+    }
   }
 
   img.Image _toStrongBlackWhite(img.Image grayscale) {

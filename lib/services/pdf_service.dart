@@ -17,13 +17,33 @@ class PdfService {
     var pageCount = 0;
 
     for (final image in images) {
+      if (!await image.exists() || await image.length() == 0) continue;
       final imageBytes = await image.readAsBytes();
-      final decoded = img.decodeImage(imageBytes);
-      if (decoded == null) {
-        continue;
+      Uint8List? usableBytes;
+      try {
+        final decoded = img.decodeImage(imageBytes);
+        if (decoded != null) {
+          final oriented = img.bakeOrientation(decoded);
+          final longest = oriented.width > oriented.height
+              ? oriented.width
+              : oriented.height;
+          final resized = longest > 2200
+              ? img.copyResize(
+                  oriented,
+                  width: oriented.width > oriented.height ? 2200 : null,
+                  height: oriented.height >= oriented.width ? 2200 : null,
+                  interpolation: img.Interpolation.cubic,
+                )
+              : oriented;
+          usableBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
+        }
+      } catch (_) {
+        usableBytes = null;
       }
-      final normalized = img.encodeJpg(decoded, quality: 95);
-      final pdfImage = pw.MemoryImage(Uint8List.fromList(normalized));
+
+      usableBytes ??= imageBytes;
+      if (usableBytes.isEmpty) continue;
+      final pdfImage = pw.MemoryImage(usableBytes);
 
       pdf.addPage(
         pw.Page(

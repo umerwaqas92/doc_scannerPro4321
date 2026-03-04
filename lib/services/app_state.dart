@@ -29,6 +29,8 @@ class AppState extends ChangeNotifier {
   List<File> _capturedImages = [];
   List<ScanPipelineResult?> _pipelineResults = [];
   List<OcrResult> _ocrResults = [];
+  bool _batchActive = false;
+  final List<File> _batchRawImages = [];
   final Map<int, String> _editedOcrTexts = {};
   ScannedDocument? _selectedDocument;
   bool _isLoading = false;
@@ -36,7 +38,7 @@ class AppState extends ChangeNotifier {
   bool _cameraInitialized = false;
   int _activeAnalysisCount = 0;
   String? _analysisStageText;
-  DocumentFilterMode _captureFilterMode = DocumentFilterMode.colorEnhanced;
+  DocumentFilterMode _captureFilterMode = DocumentFilterMode.original;
 
   // Settings
   bool _autoCrop = true;
@@ -49,6 +51,8 @@ class AppState extends ChangeNotifier {
   List<File> get capturedImages => _capturedImages;
   List<ScanPipelineResult?> get pipelineResults => _pipelineResults;
   List<OcrResult> get ocrResults => _ocrResults;
+  bool get isBatchActive => _batchActive;
+  List<File> get batchRawImages => List.unmodifiable(_batchRawImages);
   ScannedDocument? get selectedDocument => _selectedDocument;
   bool get isLoading => _isLoading;
   bool get isProcessingOcr => _isProcessingOcr;
@@ -94,6 +98,16 @@ class AppState extends ChangeNotifier {
     if (!await image.exists()) return null;
     if (await image.length() == 0) return null;
     await _addImageAndRunPipeline(image);
+    return image;
+  }
+
+  Future<File?> captureImageForBatch() async {
+    final image = await _cameraService.captureImage();
+    if (image == null) return null;
+    if (!await image.exists()) return null;
+    if (await image.length() == 0) return null;
+    _batchRawImages.add(image);
+    notifyListeners();
     return image;
   }
 
@@ -152,6 +166,15 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<void> addBatchImageFromGallery() async {
+    final image = await _imagePickerService.pickFromGallery();
+    if (image == null) return;
+    if (!await image.exists()) return;
+    if (await image.length() == 0) return;
+    _batchRawImages.add(image);
+    notifyListeners();
+  }
+
   Future<void> addMultipleFromGallery() async {
     final images = await _imagePickerService.pickMultipleFromGallery();
     if (images.isNotEmpty) {
@@ -176,6 +199,123 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  void startBatchSession() {
+    _batchActive = true;
+    _batchRawImages.clear();
+    notifyListeners();
+  }
+
+  void endBatchSession({bool clear = true}) {
+    _batchActive = false;
+    if (clear) {
+      _batchRawImages.clear();
+    }
+    notifyListeners();
+  }
+
+  Future<ScannedDocument?> finalizeBatchSession({String name = 'Batch'}) async {
+    if (_batchRawImages.isEmpty) return null;
+    try {
+      final results = <ScanPipelineResult?>[];
+      final outputs = <File>[];
+      for (final image in _batchRawImages) {
+        final result = await _scanPipelineService.run(
+          image,
+          options: const ScanPipelineOptions(
+            maxDimension: 1000,
+            minConfidence: 0.40,
+          ),
+          onStage: (stage, message) {
+            _analysisStageText = message;
+            notifyListeners();
+          },
+        );
+        if (result != null) {
+          results.add(result.copyWith(selectedFilter: _captureFilterMode));
+          final candidate =
+              result.enhancedVariants[_captureFilterMode] ??
+              result.selectedOutputFile;
+          
+          // Double check if the processed result is black/bad
+          bool useCandidate = await _isValidImageFile(candidate);
+          if (useCandidate && _captureFilterMode != DocumentFilterMode.original) {
+            // Check if the filtered version is too dark compared to original
+            final bytes = await candidate.readAsBytes();
+            final decoded = img.decodeImage(bytes);
+            if (decoded != null) {
+              double sum = 0;
+              for (int i = 0; i < 100; i++) {
+                final p = decoded.getPixel(
+                  (i * 13) % decoded.width,
+                  (i * 17) % decoded.height,
+                );
+                sum += p.luminance;
+              }
+              if (sum / 100 < 8) { // Very dark
+                useCandidate = false;
+              }
+            }
+          }
+          
+          outputs.add(useCandidate ? candidate : image);
+        } else {
+          outputs.add(image);
+          results.add(null);
+        }
+      }
+
+      final finalOutputs = <File>[];
+      for (var i = 0; i < outputs.length; i++) {
+        final candidate = outputs[i];
+        if (await _isValidImageFile(candidate)) {
+          finalOutputs.add(candidate);
+        } else if (i < _batchRawImages.length &&
+            await _isValidImageFile(_batchRawImages[i])) {
+          finalOutputs.add(_batchRawImages[i]);
+        }
+      }
+      if (finalOutputs.isEmpty) return null;
+
+      final optimized = await _exportOptimizationService.compressBatch(
+        finalOutputs,
+        quality: ExportQualityPreset.medium,
+      );
+      final optimizedOutputs = optimized.isNotEmpty ? optimized : finalOutputs;
+
+      // Double check that all files in optimizedOutputs actually exist and are not empty
+      final finalVerifiedOutputs = <File>[];
+      for (final f in optimizedOutputs) {
+        if (await f.exists() && await f.length() > 0) {
+          finalVerifiedOutputs.add(f);
+        }
+      }
+
+      if (finalVerifiedOutputs.isEmpty) return null;
+
+      _capturedImages = List<File>.from(finalVerifiedOutputs);
+      _pipelineResults = List<ScanPipelineResult?>.from(results);
+      _ocrResults.clear();
+      _editedOcrTexts.clear();
+
+      final safeName = _sanitizeFileName(name);
+      final fileName = '${safeName}_${DateTime.now().millisecondsSinceEpoch}';
+      final doc = await _pdfService.createPdfFromImages(
+        finalVerifiedOutputs,
+        fileName,
+      );
+      await _storageService.saveDocument(doc);
+      _documents.insert(0, doc);
+
+      _batchRawImages.clear();
+      _batchActive = false;
+      notifyListeners();
+      return doc;
+    } catch (e) {
+      notifyListeners();
+      return null;
+    }
+  }
+
   void clearCapturedImages() {
     _capturedImages.clear();
     _pipelineResults.clear();
@@ -183,6 +323,8 @@ class AppState extends ChangeNotifier {
     _editedOcrTexts.clear();
     _activeAnalysisCount = 0;
     _analysisStageText = null;
+    _batchRawImages.clear();
+    _batchActive = false;
     notifyListeners();
   }
 
@@ -555,6 +697,17 @@ class AppState extends ChangeNotifier {
         .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
         .replaceAll(RegExp(r'\s+'), '_');
     return cleaned.isEmpty ? 'PDF' : cleaned;
+  }
+
+  Future<bool> _isValidImageFile(File file) async {
+    try {
+      if (!await file.exists()) return false;
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      return decoded != null;
+    } catch (_) {
+      return false;
+    }
   }
 }
 

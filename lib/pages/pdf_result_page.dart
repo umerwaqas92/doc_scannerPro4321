@@ -32,28 +32,28 @@ class _PdfResultPageState extends State<PdfResultPage> {
   final OcrToolService _ocrToolService = OcrToolService();
 
   late ScannedDocument _document;
-  Future<Uint8List?>? _previewFuture;
+  Future<List<Uint8List>>? _pagesFuture;
+  int _currentPage = 0;
+  final PageController _pageController = PageController();
   bool _working = false;
 
   @override
   void initState() {
     super.initState();
     _document = widget.document;
-    _previewFuture = _loadPreview();
+    _pagesFuture = _loadAllPages();
   }
 
   @override
   void dispose() {
     _ocrToolService.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
-  Future<Uint8List?> _loadPreview() async {
-    if (!_document.isPdf) return null;
-    return _pdfProcessingService.renderFirstPage(
-      File(_document.filePath),
-      dpi: 130,
-    );
+  Future<List<Uint8List>> _loadAllPages() async {
+    if (!_document.isPdf) return [];
+    return _pdfProcessingService.renderAllPages(File(_document.filePath));
   }
 
   @override
@@ -121,41 +121,110 @@ class _PdfResultPageState extends State<PdfResultPage> {
       );
     }
 
-    return Container(
-      height: 420,
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: _document.isPdf
-          ? FutureBuilder<Uint8List?>(
-              future: _previewFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: AppColors.text),
-                  );
-                }
-                final bytes = snapshot.data;
-                if (bytes == null) {
-                  return const Center(
-                    child: Text(
-                      'Unable to render PDF preview',
-                      style: TextStyle(color: AppColors.text2),
-                    ),
-                  );
-                }
-                return ClipRRect(
+    return Column(
+      children: [
+        Container(
+          height: 420,
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: _document.isPdf
+              ? FutureBuilder<List<Uint8List>>(
+                  future: _pagesFuture,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: AppColors.text),
+                      );
+                    }
+                    final pages = snapshot.data ?? [];
+                    if (pages.isEmpty) {
+                      return Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Unable to render PDF preview',
+                              style: TextStyle(color: AppColors.text2),
+                            ),
+                            const SizedBox(height: 12),
+                            TextButton(
+                              onPressed: () {
+                                setState(() {
+                                  _pagesFuture = _loadAllPages();
+                                });
+                              },
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+                    return Stack(
+                      children: [
+                        PageView.builder(
+                          controller: _pageController,
+                          itemCount: pages.length,
+                          onPageChanged: (index) {
+                            setState(() {
+                              _currentPage = index;
+                            });
+                          },
+                          itemBuilder: (context, index) {
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Image.memory(
+                                pages[index],
+                                fit: BoxFit.contain,
+                              ),
+                            );
+                          },
+                        ),
+                        if (pages.length > 1)
+                          Positioned(
+                            bottom: 12,
+                            left: 0,
+                            right: 0,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: List.generate(
+                                pages.length,
+                                (index) => Container(
+                                  width: 8,
+                                  height: 8,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: _currentPage == index
+                                        ? AppColors.text
+                                        : AppColors.border,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                )
+              : ClipRRect(
                   borderRadius: BorderRadius.circular(16),
-                  child: Image.memory(bytes, fit: BoxFit.contain),
-                );
-              },
-            )
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Image.file(file, fit: BoxFit.contain),
+                  child: Image.file(file, fit: BoxFit.contain),
+                ),
+        ),
+        if (_document.isPdf && _document.pageCount > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Page ${_currentPage + 1} of ${_document.pageCount}',
+              style: const TextStyle(fontSize: 12, color: AppColors.text3),
             ),
+          ),
+      ],
     );
   }
 
@@ -343,7 +412,8 @@ class _PdfResultPageState extends State<PdfResultPage> {
 
     setState(() {
       _document = updated;
-      _previewFuture = _loadPreview();
+      _pagesFuture = _loadAllPages();
+      _currentPage = 0;
     });
     widget.onDocumentChanged?.call(updated);
   }

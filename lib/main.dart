@@ -87,6 +87,7 @@ class _MainScreenState extends State<MainScreen> {
     });
 
     final appState = context.read<AppState>();
+    appState.endBatchSession(clear: true);
     await appState.initializeCamera();
   }
 
@@ -107,10 +108,15 @@ class _MainScreenState extends State<MainScreen> {
   Future<bool> _onScannerCapture() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
-    final captured = await appState.captureImage();
+    final captured = appState.isBatchActive
+        ? await appState.captureImageForBatch()
+        : await appState.captureImage();
     if (captured == null) {
       _showScannerError('No clear document detected. Try again.');
       return false;
+    }
+    if (appState.isBatchActive) {
+      return true;
     }
     final isValid = _validateLastCapturedDocument(beforeCount);
     return isValid;
@@ -119,6 +125,10 @@ class _MainScreenState extends State<MainScreen> {
   Future<bool> _onScannerAddFromGallery() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
+    if (appState.isBatchActive) {
+      await appState.addBatchImageFromGallery();
+      return true;
+    }
     await appState.addImageFromGallery();
     final isValid = _validateLastCapturedDocument(
       beforeCount,
@@ -171,6 +181,40 @@ class _MainScreenState extends State<MainScreen> {
       return;
     }
 
+    if (appState.isBatchActive) {
+      final navigator = Navigator.of(context);
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.green),
+            );
+          },
+        );
+      }
+      final doc = await appState.finalizeBatchSession(name: 'Batch');
+      if (mounted) {
+        navigator.pop();
+      }
+      if (doc != null && mounted) {
+        appState.selectDocument(doc);
+        setState(() {
+          _showScanner = false;
+          _showEdit = false;
+          _showResult = false;
+          _currentIndex = 2;
+        });
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to create batch PDF')),
+        );
+      }
+      await appState.disposeCamera();
+      return;
+    }
+
     if (appState.capturedImages.isNotEmpty) {
       setState(() {
         _showScanner = false;
@@ -192,6 +236,7 @@ class _MainScreenState extends State<MainScreen> {
   void _onScannerCancel() async {
     final appState = context.read<AppState>();
     appState.clearCapturedImages();
+    appState.endBatchSession(clear: true);
 
     setState(() {
       _showScanner = false;
@@ -547,10 +592,18 @@ class _MainScreenState extends State<MainScreen> {
         isAnalyzing: appState.isAnalyzing,
         analysisStageText: appState.analysisStageText,
         capturedImages: appState.capturedImages,
+        batchImages: appState.batchRawImages,
         onCancel: _onScannerCancel,
         onDone: _onScannerDone,
         onCapture: _onScannerCapture,
         onAddFromGallery: _onScannerAddFromGallery,
+        onBatchModeChanged: (enabled) {
+          if (enabled) {
+            appState.startBatchSession();
+          } else {
+            appState.endBatchSession(clear: true);
+          }
+        },
       );
     }
 

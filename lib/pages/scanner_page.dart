@@ -10,11 +10,13 @@ class ScannerPage extends StatefulWidget {
   final VoidCallback onDone;
   final Future<bool> Function() onCapture;
   final Future<bool> Function() onAddFromGallery;
+  final ValueChanged<bool> onBatchModeChanged;
   final CameraController? cameraController;
   final bool isCameraInitialized;
   final bool isAnalyzing;
   final String? analysisStageText;
   final List<File> capturedImages;
+  final List<File> batchImages;
 
   const ScannerPage({
     super.key,
@@ -22,11 +24,13 @@ class ScannerPage extends StatefulWidget {
     required this.onDone,
     required this.onCapture,
     required this.onAddFromGallery,
+    required this.onBatchModeChanged,
     required this.cameraController,
     required this.isCameraInitialized,
     required this.isAnalyzing,
     required this.analysisStageText,
     required this.capturedImages,
+    required this.batchImages,
   });
 
   @override
@@ -36,7 +40,7 @@ class ScannerPage extends StatefulWidget {
 enum _FlashSetting { auto, on, off }
 
 class _ScannerPageState extends State<ScannerPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _isStable = false;
   bool _isCaptureActionPending = false;
   bool _isStreamRunning = false;
@@ -48,7 +52,6 @@ class _ScannerPageState extends State<ScannerPage>
   bool _awaitingDocumentMoveAfterAutoCapture = false;
   bool _isAdjustingFocus = false;
   bool _batchMode = false;
-  bool _highQuality = true;
   _FlashSetting _flashSetting = _FlashSetting.auto;
 
   late final AnimationController _openController;
@@ -57,6 +60,9 @@ class _ScannerPageState extends State<ScannerPage>
   late final Animation<double> _overlayFade;
   late final Animation<double> _focusScale;
   late final Animation<double> _focusOpacity;
+  late final AnimationController _flashController;
+  late final Animation<double> _flashOpacity;
+  late final AnimationController _thumbController;
 
   int _frameTick = 0;
   int _stableFrameCount = 0;
@@ -68,8 +74,13 @@ class _ScannerPageState extends State<ScannerPage>
   DateTime _lastFocusAdjustAt = DateTime.fromMillisecondsSinceEpoch(0);
   CameraController? _streamController;
   List<int>? _lastMotionSamples;
+  File? _lastCapturedImage;
+  Offset? _thumbStart;
+  Offset? _thumbEnd;
 
   bool get _isBusy => _isCaptureActionPending || widget.isAnalyzing;
+  List<File> get _activeImages =>
+      _batchMode ? widget.batchImages : widget.capturedImages;
 
   @override
   void initState() {
@@ -103,6 +114,18 @@ class _ScannerPageState extends State<ScannerPage>
       parent: _openController,
       curve: const Interval(0.35, 0.75, curve: Curves.easeOut),
     );
+    _flashController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 120),
+    );
+    _flashOpacity = Tween<double>(
+      begin: 0.0,
+      end: 0.95,
+    ).animate(CurvedAnimation(parent: _flashController, curve: Curves.easeOut));
+    _thumbController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_startLiveAnalyzerIfPossible());
       _openController.forward(from: 0);
@@ -129,7 +152,13 @@ class _ScannerPageState extends State<ScannerPage>
       unawaited(_startLiveAnalyzerIfPossible());
     }
 
-    if (widget.capturedImages.length > oldWidget.capturedImages.length) {
+    final previousCount = _batchMode
+        ? oldWidget.batchImages.length
+        : oldWidget.capturedImages.length;
+    final newCount = _batchMode
+        ? widget.batchImages.length
+        : widget.capturedImages.length;
+    if (newCount > previousCount) {
       _stableFrameCount = 0;
       _autoCapturedSinceUnstable = false;
       _isStable = false;
@@ -146,6 +175,8 @@ class _ScannerPageState extends State<ScannerPage>
   void dispose() {
     unawaited(_stopLiveAnalyzer());
     _openController.dispose();
+    _flashController.dispose();
+    _thumbController.dispose();
     super.dispose();
   }
 
@@ -159,6 +190,7 @@ class _ScannerPageState extends State<ScannerPage>
     _awaitingDocumentMoveAfterAutoCapture = false;
     _missingDocumentFrames = 0;
     _lastMotionSamples = null;
+    _lastCapturedImage = null;
   }
 
   Future<void> _restartLiveAnalyzer() async {
@@ -534,7 +566,10 @@ class _ScannerPageState extends State<ScannerPage>
             bottom: 24 + MediaQuery.of(context).padding.bottom,
             child: _buildBottomControls(),
           ),
-          if (_isBusy) _buildScanningOverlay(),
+          if (_lastCapturedImage != null && _batchMode)
+            _buildThumbnailFlight(context),
+          Positioned.fill(child: _buildFlashOverlay()),
+          if (_isBusy && !_batchMode) _buildScanningOverlay(),
         ],
       ),
     );
@@ -634,8 +669,15 @@ class _ScannerPageState extends State<ScannerPage>
             ),
           ),
         ),
-        if (_batchMode && widget.capturedImages.isNotEmpty)
+        if (_batchMode && _activeImages.isNotEmpty)
           Positioned(left: 16, bottom: 120, child: _buildBatchCounter()),
+        if (_autoCaptureEnabled && !_isStable && !_batchMode)
+          Positioned(
+            bottom: 200,
+            left: 24,
+            right: 24,
+            child: _buildLiveAnalyzingChip(),
+          ),
         Positioned.fill(
           child: IgnorePointer(
             child: Center(
@@ -669,11 +711,7 @@ class _ScannerPageState extends State<ScannerPage>
         _buildTopIcon(Icons.close, widget.onCancel, tooltip: 'Close'),
         const Spacer(),
         _buildFlashToggle(),
-        const SizedBox(width: 10),
-        _buildQualityBadge(),
-        const SizedBox(width: 10),
-        _buildTopIcon(Icons.more_horiz, _showCameraMenu, tooltip: 'Menu'),
-        if (_batchMode && widget.capturedImages.isNotEmpty) ...[
+        if (_batchMode && _activeImages.isNotEmpty) ...[
           const SizedBox(width: 10),
           _buildDoneButton(),
         ],
@@ -766,30 +804,6 @@ class _ScannerPageState extends State<ScannerPage>
     );
   }
 
-  Widget _buildQualityBadge() {
-    return GestureDetector(
-      onTap: _isBusy ? null : _toggleQuality,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: _highQuality
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.black.withValues(alpha: 0.35),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
-        ),
-        child: Text(
-          _highQuality ? 'HD' : 'SD',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildBottomControls() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -812,8 +826,9 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildBatchCounter() {
-    final count = widget.capturedImages.length;
-    final latest = widget.capturedImages.last;
+    final count = _activeImages.length;
+    final latest = _activeImages.last;
+    final scale = 1.0 + (_thumbController.value * 0.05);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -847,9 +862,46 @@ class _ScannerPageState extends State<ScannerPage>
             ),
           ),
           const SizedBox(width: 10),
-          Text(
-            'Pages: $count',
-            style: const TextStyle(
+          Transform.scale(
+            scale: scale,
+            child: Text(
+              'Pages: $count',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiveAnalyzingChip() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppColors.green.withValues(alpha: 0.9),
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'Analyzing frame…',
+            style: TextStyle(
               color: Colors.white,
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -857,6 +909,84 @@ class _ScannerPageState extends State<ScannerPage>
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildFlashOverlay() {
+    return IgnorePointer(
+      child: FadeTransition(
+        opacity: _flashOpacity,
+        child: Container(color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildThumbnailFlight(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final start =
+            _thumbStart ??
+            Offset(
+              constraints.maxWidth / 2 - 80,
+              constraints.maxHeight / 2 - 110,
+            );
+        final end =
+            _thumbEnd ??
+            Offset(
+              26,
+              constraints.maxHeight -
+                  24 -
+                  MediaQuery.of(context).padding.bottom -
+                  160,
+            );
+        _thumbStart = start;
+        _thumbEnd = end;
+
+        final position = Tween<Offset>(begin: start, end: end).animate(
+          CurvedAnimation(parent: _thumbController, curve: Curves.easeOutCubic),
+        );
+        final scale = Tween<double>(begin: 1.0, end: 0.3).animate(
+          CurvedAnimation(parent: _thumbController, curve: Curves.easeOut),
+        );
+        final opacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+          CurvedAnimation(parent: _thumbController, curve: Curves.easeIn),
+        );
+
+        return AnimatedBuilder(
+          animation: _thumbController,
+          builder: (context, child) {
+            return Positioned(
+              left: position.value.dx,
+              top: position.value.dy,
+              child: Opacity(
+                opacity: opacity.value,
+                child: Transform.scale(scale: scale.value, child: child),
+              ),
+            );
+          },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.file(
+              _lastCapturedImage!,
+              width: 160,
+              height: 220,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  width: 160,
+                  height: 220,
+                  color: Colors.white10,
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.image_not_supported,
+                    color: Colors.white54,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -893,9 +1023,11 @@ class _ScannerPageState extends State<ScannerPage>
         children: [
           _buildModeChip('Single', !_batchMode, () {
             setState(() => _batchMode = false);
+            widget.onBatchModeChanged(false);
           }),
           _buildModeChip('Batch', _batchMode, () {
             setState(() => _batchMode = true);
+            widget.onBatchModeChanged(true);
           }),
         ],
       ),
@@ -975,62 +1107,7 @@ class _ScannerPageState extends State<ScannerPage>
     );
   }
 
-  void _showCameraMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildMenuTile(
-                  'Auto Capture',
-                  _autoCaptureEnabled ? 'On' : 'Off',
-                ),
-                _buildMenuTile('Quality', _highQuality ? 'HD' : 'SD'),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildMenuTile(String title, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: AppColors.text,
-            ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 13, color: AppColors.text2),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _toggleQuality() {
-    setState(() => _highQuality = !_highQuality);
-  }
+  // Menu removed per design.
 
   void _cycleFlashMode() {
     setState(() {
@@ -1069,7 +1146,7 @@ class _ScannerPageState extends State<ScannerPage>
 
   Future<void> _onCapture({required bool autoTriggered}) async {
     if (_isBusy) return;
-    final beforeCount = widget.capturedImages.length;
+    final beforeCount = _activeImages.length;
 
     final manualAutoModeBlocked =
         _autoCaptureEnabled &&
@@ -1103,11 +1180,11 @@ class _ScannerPageState extends State<ScannerPage>
       await widget.onCapture();
     } finally {
       if (mounted) {
-        capturedAdded = widget.capturedImages.length > beforeCount;
+        capturedAdded = _activeImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
           _liveStatus = capturedAdded && _batchMode
-              ? 'Page ${widget.capturedImages.length} added'
+              ? 'Page ${_activeImages.length} added'
               : 'Searching for document...';
           if (autoTriggered && capturedAdded) {
             _autoCapturedSinceUnstable = true;
@@ -1120,6 +1197,9 @@ class _ScannerPageState extends State<ScannerPage>
       widget.onDone();
       return;
     }
+    if (capturedAdded && _batchMode) {
+      _triggerCaptureFeedback();
+    }
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
@@ -1130,7 +1210,7 @@ class _ScannerPageState extends State<ScannerPage>
 
   Future<void> _onAddFromGallery() async {
     if (_isBusy) return;
-    final beforeCount = widget.capturedImages.length;
+    final beforeCount = _activeImages.length;
     setState(() {
       _isCaptureActionPending = true;
       _isStable = false;
@@ -1146,11 +1226,11 @@ class _ScannerPageState extends State<ScannerPage>
       await widget.onAddFromGallery();
     } finally {
       if (mounted) {
-        capturedAdded = widget.capturedImages.length > beforeCount;
+        capturedAdded = _activeImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
           _liveStatus = capturedAdded && _batchMode
-              ? 'Page ${widget.capturedImages.length} added'
+              ? 'Page ${_activeImages.length} added'
               : 'Searching for document...';
         });
       }
@@ -1160,9 +1240,26 @@ class _ScannerPageState extends State<ScannerPage>
       widget.onDone();
       return;
     }
+    if (capturedAdded && _batchMode) {
+      _triggerCaptureFeedback();
+    }
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
+  }
+
+  void _triggerCaptureFeedback() {
+    if (!mounted) return;
+    _flashController.forward(from: 0).then((_) {
+      if (mounted) {
+        _flashController.reverse();
+      }
+    });
+    if (_activeImages.isEmpty) return;
+    _lastCapturedImage = _activeImages.last;
+    _thumbStart = null;
+    _thumbEnd = null;
+    _thumbController.forward(from: 0);
   }
 
   Widget _buildScanningOverlay() {
