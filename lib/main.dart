@@ -146,11 +146,13 @@ class _MainScreenState extends State<MainScreen> {
     // Keep capture flow permissive: users can manually scan any page and fix in edit.
     if (pipeline == null) return true;
 
-    // Only show a soft warning for extremely weak detections; do not block.
-    final extremelyWeak =
-        pipeline.detectionConfidence < 0.05 && pipeline.usedFallback;
-    if (extremelyWeak) {
-      _showScannerError('Image may be unclear. You can adjust it in Edit.');
+    // Keep capture permissive, but warn when auto perspective is weak.
+    final weakPerspective =
+        !pipeline.perspectiveApplied ||
+        pipeline.perspectiveConfidence < 0.42 ||
+        pipeline.usedFallback;
+    if (weakPerspective) {
+      _showScannerError('Auto corners were weak. You can adjust in Edit.');
     }
     return true;
   }

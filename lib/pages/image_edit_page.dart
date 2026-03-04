@@ -658,9 +658,10 @@ class _ImageEditPageState extends State<ImageEditPage> {
         ? widget.pipelineResults[index]
         : null;
     final source = pipeline?.originalFile ?? widget.images[index];
-    final initialCorners = (pipeline?.corners ?? const <ScanCorner>[])
-        .take(4)
-        .toList(growable: false);
+    final initialCorners =
+        (pipeline?.orderedCorners ?? pipeline?.corners ?? const <ScanCorner>[])
+            .take(4)
+            .toList(growable: false);
 
     final updatedCorners = await Navigator.push<List<ScanCorner>>(
       context,
@@ -680,6 +681,7 @@ class _ImageEditPageState extends State<ImageEditPage> {
         source,
         updatedCorners.map((c) => ScanPoint(c.x, c.y)).toList(growable: false),
         suffix: 'manual_warp',
+        useDefaultOnInvalid: false,
       );
       final cleaned = warped == null
           ? null

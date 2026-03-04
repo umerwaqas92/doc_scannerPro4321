@@ -88,12 +88,41 @@ class _CornerAdjustPageState extends State<CornerAdjustPage> {
         )
         .toList(growable: false);
 
-    final sorted = List<ScanCorner>.from(clamped)
-      ..sort((a, b) => a.y.compareTo(b.y));
-    final top = sorted.take(2).toList()..sort((a, b) => a.x.compareTo(b.x));
-    final bottom = sorted.skip(2).toList()..sort((a, b) => a.x.compareTo(b.x));
+    if (clamped.length != 4) return _defaultCorners(size);
 
-    return [top[0], top[1], bottom[1], bottom[0]];
+    final cx = clamped.fold<double>(0.0, (sum, c) => sum + c.x) / 4;
+    final cy = clamped.fold<double>(0.0, (sum, c) => sum + c.y) / 4;
+
+    final withAngles =
+        clamped
+            .map((c) => (corner: c, angle: math.atan2(c.y - cy, c.x - cx)))
+            .toList(growable: false)
+          ..sort((a, b) => a.angle.compareTo(b.angle));
+
+    final sorted = withAngles.map((it) => it.corner).toList(growable: false);
+    var start = 0;
+    var minSum = double.infinity;
+    for (int i = 0; i < sorted.length; i++) {
+      final sum = sorted[i].x + sorted[i].y;
+      if (sum < minSum) {
+        minSum = sum;
+        start = i;
+      }
+    }
+
+    final ordered = List<ScanCorner>.generate(
+      4,
+      (i) => sorted[(start + i) % 4],
+      growable: false,
+    );
+
+    final cross =
+        (ordered[1].x - ordered[0].x) * (ordered[2].y - ordered[0].y) -
+        (ordered[1].y - ordered[0].y) * (ordered[2].x - ordered[0].x);
+    if (cross < 0) {
+      return [ordered[0], ordered[3], ordered[2], ordered[1]];
+    }
+    return ordered;
   }
 
   Future<void> _runAutoDetect({required bool showFeedback}) async {

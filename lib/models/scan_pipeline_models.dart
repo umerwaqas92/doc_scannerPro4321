@@ -122,8 +122,11 @@ class ScanPipelineResult {
   final File croppedFile;
   final Map<DocumentFilterMode, File> enhancedVariants;
   final List<ScanCorner> corners;
+  final List<ScanCorner> orderedCorners;
   final double detectionConfidence;
+  final double perspectiveConfidence;
   final bool usedFallback;
+  final bool perspectiveApplied;
   final Map<ScanStage, StageState> stageStatus;
   final DocumentFilterMode selectedFilter;
 
@@ -134,11 +137,15 @@ class ScanPipelineResult {
     required this.croppedFile,
     required this.enhancedVariants,
     required this.corners,
+    List<ScanCorner>? orderedCorners,
     required this.detectionConfidence,
+    double? perspectiveConfidence,
     required this.usedFallback,
+    this.perspectiveApplied = false,
     required this.stageStatus,
     this.selectedFilter = DocumentFilterMode.colorEnhanced,
-  });
+  }) : orderedCorners = orderedCorners ?? corners,
+       perspectiveConfidence = perspectiveConfidence ?? detectionConfidence;
 
   File get selectedOutputFile {
     return enhancedVariants[selectedFilter] ?? croppedFile;
@@ -148,6 +155,9 @@ class ScanPipelineResult {
     Map<DocumentFilterMode, File>? enhancedVariants,
     DocumentFilterMode? selectedFilter,
     Map<ScanStage, StageState>? stageStatus,
+    List<ScanCorner>? orderedCorners,
+    double? perspectiveConfidence,
+    bool? perspectiveApplied,
   }) {
     return ScanPipelineResult(
       originalFile: originalFile,
@@ -156,8 +166,12 @@ class ScanPipelineResult {
       croppedFile: croppedFile,
       enhancedVariants: enhancedVariants ?? this.enhancedVariants,
       corners: corners,
+      orderedCorners: orderedCorners ?? this.orderedCorners,
       detectionConfidence: detectionConfidence,
+      perspectiveConfidence:
+          perspectiveConfidence ?? this.perspectiveConfidence,
       usedFallback: usedFallback,
+      perspectiveApplied: perspectiveApplied ?? this.perspectiveApplied,
       stageStatus: stageStatus ?? this.stageStatus,
       selectedFilter: selectedFilter ?? this.selectedFilter,
     );

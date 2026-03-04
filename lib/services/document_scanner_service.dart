@@ -218,6 +218,7 @@ class DocumentScannerService {
     File imageFile,
     List<ScanPoint> corners, {
     String suffix = 'warped',
+    bool useDefaultOnInvalid = true,
   }) async {
     try {
       if (corners.length != 4) return imageFile;
@@ -229,7 +230,9 @@ class DocumentScannerService {
         corners,
         decoded.width,
         decoded.height,
+        useDefaultOnInvalid: useDefaultOnInvalid,
       );
+      if (ordered == null) return imageFile;
       final warped = _applyPerspectiveCorrection(decoded, ordered);
       final outputPath = _buildDerivedPath(imageFile.path, suffix);
       final outputFile = File(outputPath);
@@ -887,12 +890,13 @@ class DocumentScannerService {
         areaRatio >= minAreaRatio;
   }
 
-  List<ScanPoint> _orderPerspectiveCorners(
+  List<ScanPoint>? _orderPerspectiveCorners(
     List<ScanPoint> corners,
     int width,
-    int height,
-  ) {
-    if (corners.length != 4) return corners;
+    int height, {
+    bool useDefaultOnInvalid = true,
+  }) {
+    if (corners.length != 4) return null;
 
     final clamped = corners
         .map(
@@ -903,16 +907,56 @@ class DocumentScannerService {
         )
         .toList(growable: false);
 
-    final sorted = List<ScanPoint>.from(clamped)
-      ..sort((a, b) => a.y.compareTo(b.y));
-    final top = sorted.take(2).toList()..sort((a, b) => a.x.compareTo(b.x));
-    final bottom = sorted.skip(2).toList()..sort((a, b) => a.x.compareTo(b.x));
-    final ordered = [top[0], top[1], bottom[1], bottom[0]];
+    final ordered = _orderCornersClockwise(clamped);
 
     if (!_isValidQuadrilateral(ordered)) {
-      return _getDefaultEdges(width, height);
+      return useDefaultOnInvalid ? _getDefaultEdges(width, height) : null;
     }
     return ordered;
+  }
+
+  List<ScanPoint> _orderCornersClockwise(List<ScanPoint> points) {
+    if (points.length != 4) return points;
+
+    final cx = points.fold<double>(0.0, (sum, p) => sum + p.x) / points.length;
+    final cy = points.fold<double>(0.0, (sum, p) => sum + p.y) / points.length;
+
+    final withAngle =
+        points
+            .map((p) => (point: p, angle: math.atan2(p.y - cy, p.x - cx)))
+            .toList(growable: false)
+          ..sort((a, b) => a.angle.compareTo(b.angle));
+
+    final ordered = withAngle.map((e) => e.point).toList(growable: false);
+    var start = 0;
+    var best = double.infinity;
+    for (int i = 0; i < ordered.length; i++) {
+      final value = ordered[i].x + ordered[i].y;
+      if (value < best) {
+        best = value;
+        start = i;
+      }
+    }
+
+    final rotated = List<ScanPoint>.generate(
+      4,
+      (i) => ordered[(start + i) % 4],
+      growable: false,
+    );
+
+    final cross = _cross(rotated[0], rotated[1], rotated[2]);
+    if (cross < 0) {
+      return [rotated[0], rotated[3], rotated[2], rotated[1]];
+    }
+    return rotated;
+  }
+
+  double _cross(ScanPoint a, ScanPoint b, ScanPoint c) {
+    final abx = b.x - a.x;
+    final aby = b.y - a.y;
+    final acx = c.x - a.x;
+    final acy = c.y - a.y;
+    return abx * acy - aby * acx;
   }
 
   static img.Image _preprocessResize(img.Image image, int maxHeight) {
@@ -1753,7 +1797,28 @@ class DocumentScannerService {
     if (edges == null || edges.length != 4) return false;
 
     final area = _polygonArea(edges);
-    return area > 1000;
+    if (area < 1000) return false;
+
+    final top = _distance(edges[0], edges[1]);
+    final right = _distance(edges[1], edges[2]);
+    final bottom = _distance(edges[2], edges[3]);
+    final left = _distance(edges[3], edges[0]);
+    final minEdge = math.min(math.min(top, right), math.min(bottom, left));
+    if (minEdge < 18) return false;
+
+    final maxEdge = math.max(math.max(top, right), math.max(bottom, left));
+    if (maxEdge / minEdge > 25) return false;
+
+    if (_segmentsIntersect(edges[0], edges[1], edges[2], edges[3]) ||
+        _segmentsIntersect(edges[1], edges[2], edges[3], edges[0])) {
+      return false;
+    }
+
+    if (!_anglesLookDocumentLike(edges)) {
+      return false;
+    }
+
+    return true;
   }
 
   double _polygonArea(List<ScanPoint> points) {
@@ -1764,6 +1829,58 @@ class DocumentScannerService {
       j = i;
     }
     return (area / 2).abs();
+  }
+
+  bool _segmentsIntersect(ScanPoint a, ScanPoint b, ScanPoint c, ScanPoint d) {
+    double orientation(ScanPoint p, ScanPoint q, ScanPoint r) {
+      return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+    }
+
+    bool onSegment(ScanPoint p, ScanPoint q, ScanPoint r) {
+      return q.x <= math.max(p.x, r.x) &&
+          q.x >= math.min(p.x, r.x) &&
+          q.y <= math.max(p.y, r.y) &&
+          q.y >= math.min(p.y, r.y);
+    }
+
+    final o1 = orientation(a, b, c);
+    final o2 = orientation(a, b, d);
+    final o3 = orientation(c, d, a);
+    final o4 = orientation(c, d, b);
+
+    if ((o1 > 0) != (o2 > 0) && (o3 > 0) != (o4 > 0)) {
+      return true;
+    }
+    if (o1.abs() < 1e-6 && onSegment(a, c, b)) return true;
+    if (o2.abs() < 1e-6 && onSegment(a, d, b)) return true;
+    if (o3.abs() < 1e-6 && onSegment(c, a, d)) return true;
+    if (o4.abs() < 1e-6 && onSegment(c, b, d)) return true;
+    return false;
+  }
+
+  bool _anglesLookDocumentLike(List<ScanPoint> points) {
+    for (int i = 0; i < points.length; i++) {
+      final prev = points[(i + points.length - 1) % points.length];
+      final current = points[i];
+      final next = points[(i + 1) % points.length];
+
+      final v1x = prev.x - current.x;
+      final v1y = prev.y - current.y;
+      final v2x = next.x - current.x;
+      final v2y = next.y - current.y;
+
+      final mag1 = math.sqrt(v1x * v1x + v1y * v1y);
+      final mag2 = math.sqrt(v2x * v2x + v2y * v2y);
+      if (mag1 < 1e-3 || mag2 < 1e-3) return false;
+
+      final cosValue = ((v1x * v2x) + (v1y * v2y)) / (mag1 * mag2);
+      final angle = math.acos(cosValue.clamp(-1.0, 1.0));
+      final deg = angle * 180 / math.pi;
+      if (deg < 25 || deg > 165) {
+        return false;
+      }
+    }
+    return true;
   }
 
   img.Image _applyPerspectiveCorrection(

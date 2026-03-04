@@ -37,13 +37,17 @@ class OpenCvDocumentAnalyzer {
       }
     }
 
+    final refined = _refineCornersWithEdgeMask(best.corners, edges);
     final corners = _scaleCorners(
-      best.corners,
+      refined,
       fromWidth: scaled.width,
       fromHeight: scaled.height,
       toWidth: decoded.width,
       toHeight: decoded.height,
     );
+    if (!_cornersLookValid(corners, decoded.width, decoded.height)) {
+      return _fallbackForSize(decoded.width, decoded.height);
+    }
 
     final geometryConfidence = _computeGeometryConfidence(
       corners,
@@ -53,7 +57,7 @@ class OpenCvDocumentAnalyzer {
       analyzedWidth: scaled.width,
       analyzedHeight: scaled.height,
     );
-    final confidence = (0.68 * best.score + 0.32 * geometryConfidence).clamp(
+    final confidence = (0.72 * best.score + 0.28 * geometryConfidence).clamp(
       0.0,
       1.0,
     );
@@ -284,7 +288,7 @@ class OpenCvDocumentAnalyzer {
     required int edgePixels,
   }) {
     final areaRatio = _polygonArea(corners) / (width * height);
-    final areaScore = ((areaRatio - 0.1) / 0.7).clamp(0.0, 1.0);
+    final areaScore = ((areaRatio - 0.09) / 0.65).clamp(0.0, 1.0);
 
     final topWidth = _distance(corners[0], corners[1]);
     final bottomWidth = _distance(corners[3], corners[2]);
@@ -303,6 +307,16 @@ class OpenCvDocumentAnalyzer {
           0.0,
           1.0,
         );
+
+    final minX = corners.map((c) => c.x).reduce((a, b) => a < b ? a : b);
+    final maxX = corners.map((c) => c.x).reduce((a, b) => a > b ? a : b);
+    final minY = corners.map((c) => c.y).reduce((a, b) => a < b ? a : b);
+    final maxY = corners.map((c) => c.y).reduce((a, b) => a > b ? a : b);
+    final bboxArea = ((maxX - minX) * (maxY - minY)).clamp(
+      1.0,
+      double.infinity,
+    );
+    final rectangularity = (_polygonArea(corners) / bboxArea).clamp(0.0, 1.0);
 
     final centerX =
         (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
@@ -331,22 +345,133 @@ class OpenCvDocumentAnalyzer {
               c.y > height - borderPadY;
         }).length >=
         3;
-    final borderPenalty = touchesBorders ? 0.14 : 0.0;
+    final borderPenalty = touchesBorders ? 0.08 : 0.0;
 
-    return (0.42 * areaScore +
+    return (0.34 * areaScore +
             0.30 * geometryScore +
-            0.16 * centerScore +
-            0.12 * edgeDensityScore -
+            0.20 * rectangularity +
+            0.10 * edgeDensityScore +
+            0.06 * centerScore -
             borderPenalty)
         .clamp(0.0, 1.0);
   }
 
   List<ScanCorner> _orderCorners(List<ScanCorner> corners) {
-    final sorted = List<ScanCorner>.from(corners)
-      ..sort((a, b) => a.y.compareTo(b.y));
-    final top = sorted.take(2).toList()..sort((a, b) => a.x.compareTo(b.x));
-    final bottom = sorted.skip(2).toList()..sort((a, b) => a.x.compareTo(b.x));
-    return [top[0], top[1], bottom[1], bottom[0]];
+    final centerX = corners.fold<double>(0.0, (sum, c) => sum + c.x) / 4;
+    final centerY = corners.fold<double>(0.0, (sum, c) => sum + c.y) / 4;
+
+    final withAngles =
+        corners
+            .map(
+              (c) =>
+                  (corner: c, angle: math.atan2(c.y - centerY, c.x - centerX)),
+            )
+            .toList(growable: false)
+          ..sort((a, b) => a.angle.compareTo(b.angle));
+
+    final sorted = withAngles.map((it) => it.corner).toList(growable: false);
+    var startIndex = 0;
+    var minSum = double.infinity;
+    for (int i = 0; i < sorted.length; i++) {
+      final sum = sorted[i].x + sorted[i].y;
+      if (sum < minSum) {
+        minSum = sum;
+        startIndex = i;
+      }
+    }
+
+    final rotated = List<ScanCorner>.generate(
+      4,
+      (i) => sorted[(startIndex + i) % 4],
+      growable: false,
+    );
+    final cross = _cross(rotated[0], rotated[1], rotated[2]);
+    if (cross < 0) {
+      return [rotated[0], rotated[3], rotated[2], rotated[1]];
+    }
+    return rotated;
+  }
+
+  List<ScanCorner> _refineCornersWithEdgeMask(
+    List<ScanCorner> corners,
+    _EdgeMap edges,
+  ) {
+    if (corners.length != 4) return corners;
+    final radius = (math.min(edges.width, edges.height) * 0.045).round().clamp(
+      12,
+      28,
+    );
+
+    final refined = corners
+        .map((corner) => _snapCornerToEdge(corner, edges, radius))
+        .toList(growable: false);
+    return _orderCorners(refined);
+  }
+
+  ScanCorner _snapCornerToEdge(ScanCorner corner, _EdgeMap edges, int radius) {
+    final cx = corner.x.round().clamp(0, edges.width - 1);
+    final cy = corner.y.round().clamp(0, edges.height - 1);
+    double bestScore = -1e9;
+    int bestX = cx;
+    int bestY = cy;
+
+    for (int y = cy - radius; y <= cy + radius; y++) {
+      if (y < 1 || y >= edges.height - 1) continue;
+      for (int x = cx - radius; x <= cx + radius; x++) {
+        if (x < 1 || x >= edges.width - 1) continue;
+        final idx = y * edges.width + x;
+        if (edges.mask[idx] == 0) continue;
+
+        int support = 0;
+        for (int ny = y - 2; ny <= y + 2; ny++) {
+          for (int nx = x - 2; nx <= x + 2; nx++) {
+            if (nx < 0 || ny < 0 || nx >= edges.width || ny >= edges.height) {
+              continue;
+            }
+            if (edges.mask[ny * edges.width + nx] == 1) {
+              support++;
+            }
+          }
+        }
+
+        final dx = (x - cx).toDouble();
+        final dy = (y - cy).toDouble();
+        final dist = math.sqrt(dx * dx + dy * dy);
+        final score = support * 1.6 - dist * 0.30;
+        if (score > bestScore) {
+          bestScore = score;
+          bestX = x;
+          bestY = y;
+        }
+      }
+    }
+
+    return ScanCorner(bestX.toDouble(), bestY.toDouble());
+  }
+
+  bool _cornersLookValid(List<ScanCorner> corners, int width, int height) {
+    if (corners.length != 4) return false;
+    final area = _polygonArea(corners);
+    final areaRatio = area / (width * height);
+    if (areaRatio < 0.1 || areaRatio > 0.95) return false;
+
+    final top = _distance(corners[0], corners[1]);
+    final right = _distance(corners[1], corners[2]);
+    final bottom = _distance(corners[2], corners[3]);
+    final left = _distance(corners[3], corners[0]);
+    final minEdge = math.min(math.min(top, right), math.min(bottom, left));
+    final maxEdge = math.max(math.max(top, right), math.max(bottom, left));
+    if (minEdge < 12 || maxEdge / minEdge > 24) return false;
+
+    return _rightAngleScore(corners) > 0.18;
+  }
+
+  double _cross(ScanCorner a, ScanCorner b, ScanCorner c) {
+    final abx = b.x - a.x;
+    final aby = b.y - a.y;
+    final acx = c.x - a.x;
+    final acy = c.y - a.y;
+    return abx * acy - aby * acx;
   }
 
   List<ScanCorner> _scaleCorners(
@@ -396,16 +521,27 @@ class OpenCvDocumentAnalyzer {
         ((leftHeight - rightHeight).abs() / math.max(leftHeight, rightHeight));
     final angleScore = _rightAngleScore(corners);
 
+    final minX = corners.map((c) => c.x).reduce((a, b) => a < b ? a : b);
+    final maxX = corners.map((c) => c.x).reduce((a, b) => a > b ? a : b);
+    final minY = corners.map((c) => c.y).reduce((a, b) => a < b ? a : b);
+    final maxY = corners.map((c) => c.y).reduce((a, b) => a > b ? a : b);
+    final bboxArea = ((maxX - minX) * (maxY - minY)).clamp(
+      1.0,
+      double.infinity,
+    );
+    final rectangularity = (area / bboxArea).clamp(0.0, 1.0);
+
     final geometricScore =
         ((widthConsistency + heightConsistency + angleScore) / 3.0).clamp(
           0.0,
           1.0,
         );
 
-    return (0.44 * areaScore + 0.24 * edgeScore + 0.32 * geometricScore).clamp(
-      0.0,
-      1.0,
-    );
+    return (0.38 * areaScore +
+            0.22 * edgeScore +
+            0.28 * geometricScore +
+            0.12 * rectangularity)
+        .clamp(0.0, 1.0);
   }
 
   double _rightAngleScore(List<ScanCorner> c) {

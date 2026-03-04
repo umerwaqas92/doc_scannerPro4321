@@ -32,6 +32,9 @@ class ScanPipelineService {
     File perspective = input;
     File cropped = input;
     DetectedDocument? detected;
+    bool perspectiveApplied = false;
+    double perspectiveConfidence = 0.0;
+    List<ScanCorner> orderedCorners = const <ScanCorner>[];
 
     try {
       stageStatus[ScanStage.preprocess] = const StageState(
@@ -67,6 +70,8 @@ class ScanPipelineService {
         normalizedInput,
         minConfidence: options.minConfidence,
       );
+      perspectiveConfidence = detected.confidence;
+      orderedCorners = List<ScanCorner>.from(detected.corners, growable: false);
       stageStatus[ScanStage.detectEdges] = StageState(
         completed: true,
         message: detected.isFallback
@@ -86,28 +91,42 @@ class ScanPipelineService {
         ScanStage.perspectiveCorrection,
         'Applying perspective correction',
       );
-      final points = detected.corners
-          .map((c) => ScanPoint(c.x, c.y))
-          .toList(growable: false);
-      perspective =
-          await _scannerService.applyPerspectiveFromCorners(
-            normalizedInput,
-            points,
-            suffix: 'warped',
-          ) ??
-          normalizedInput;
-      stageStatus[ScanStage.perspectiveCorrection] = const StageState(
+      if (_isReliablePerspectiveCandidate(detected, options.minConfidence)) {
+        final points = detected.corners
+            .map((c) => ScanPoint(c.x, c.y))
+            .toList(growable: false);
+        perspective =
+            await _scannerService.applyPerspectiveFromCorners(
+              normalizedInput,
+              points,
+              suffix: 'warped',
+              useDefaultOnInvalid: false,
+            ) ??
+            normalizedInput;
+        perspectiveApplied = perspective.path != normalizedInput.path;
+      } else {
+        perspective = normalizedInput;
+      }
+
+      final perspectiveMessage = perspectiveApplied
+          ? 'Perspective corrected'
+          : 'Perspective skipped (weak corners)';
+      stageStatus[ScanStage.perspectiveCorrection] = StageState(
         completed: true,
-        message: 'Perspective corrected',
+        message: perspectiveMessage,
       );
-      onStage?.call(ScanStage.perspectiveCorrection, 'Perspective corrected');
+      onStage?.call(ScanStage.perspectiveCorrection, perspectiveMessage);
 
       stageStatus[ScanStage.crop] = const StageState(
         completed: false,
         message: 'Auto-cropping document',
       );
       onStage?.call(ScanStage.crop, 'Auto-cropping document');
-      cropped = await _autoCropDocument(perspective);
+      if (perspectiveApplied) {
+        cropped = await _postProcessPerspective(perspective);
+      } else {
+        cropped = await _autoCropDocument(normalizedInput);
+      }
       stageStatus[ScanStage.crop] = const StageState(
         completed: true,
         message: 'Auto-crop complete',
@@ -133,13 +152,35 @@ class ScanPipelineService {
         croppedFile: cropped,
         enhancedVariants: variants,
         corners: detected.corners,
+        orderedCorners: orderedCorners,
         detectionConfidence: detected.confidence,
+        perspectiveConfidence: perspectiveConfidence,
         usedFallback: detected.isFallback,
+        perspectiveApplied: perspectiveApplied,
         stageStatus: stageStatus,
       );
     } catch (_) {
       return null;
     }
+  }
+
+  bool _isReliablePerspectiveCandidate(
+    DetectedDocument detected,
+    double minConfidence,
+  ) {
+    final threshold = math.max(minConfidence, 0.45);
+    return !detected.isFallback &&
+        detected.corners.length == 4 &&
+        detected.confidence >= threshold;
+  }
+
+  Future<File> _postProcessPerspective(File perspectiveFile) async {
+    return await _scannerService.postProcessWarpedDocument(
+          perspectiveFile,
+          suffix: 'cropped',
+          quality: 92,
+        ) ??
+        perspectiveFile;
   }
 
   Future<File> _normalizeOrientation(File source) async {
