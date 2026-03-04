@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
+import '../widgets/scan_overlay.dart';
 
 class ScannerPage extends StatefulWidget {
   final VoidCallback onCancel;
@@ -33,7 +34,12 @@ class ScannerPage extends StatefulWidget {
   State<ScannerPage> createState() => _ScannerPageState();
 }
 
-class _ScannerPageState extends State<ScannerPage> {
+enum _ScanMode { color, bw, grayscale }
+
+enum _FlashSetting { auto, on, off }
+
+class _ScannerPageState extends State<ScannerPage>
+    with SingleTickerProviderStateMixin {
   bool _isStable = false;
   bool _isCaptureActionPending = false;
   bool _isStreamRunning = false;
@@ -44,6 +50,17 @@ class _ScannerPageState extends State<ScannerPage> {
   bool _autoCapturedSinceUnstable = false;
   bool _awaitingDocumentMoveAfterAutoCapture = false;
   bool _isAdjustingFocus = false;
+  bool _batchMode = false;
+  bool _highQuality = true;
+  _ScanMode _scanMode = _ScanMode.color;
+  _FlashSetting _flashSetting = _FlashSetting.auto;
+
+  late final AnimationController _openController;
+  late final Animation<double> _cameraFade;
+  late final Animation<Offset> _cameraSlide;
+  late final Animation<double> _overlayFade;
+  late final Animation<double> _focusScale;
+  late final Animation<double> _focusOpacity;
 
   int _frameTick = 0;
   int _stableFrameCount = 0;
@@ -60,8 +77,38 @@ class _ScannerPageState extends State<ScannerPage> {
   @override
   void initState() {
     super.initState();
+    _openController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+    );
+    _cameraFade = CurvedAnimation(
+      parent: _openController,
+      curve: const Interval(0.0, 0.7, curve: Curves.easeOut),
+    );
+    _cameraSlide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+        .animate(
+          CurvedAnimation(
+            parent: _openController,
+            curve: const Interval(0.0, 0.7, curve: Curves.easeOutCubic),
+          ),
+        );
+    _overlayFade = CurvedAnimation(
+      parent: _openController,
+      curve: const Interval(0.25, 1.0, curve: Curves.easeOut),
+    );
+    _focusScale = Tween<double>(begin: 0.85, end: 1.1).animate(
+      CurvedAnimation(
+        parent: _openController,
+        curve: const Interval(0.35, 0.85, curve: Curves.easeOutBack),
+      ),
+    );
+    _focusOpacity = CurvedAnimation(
+      parent: _openController,
+      curve: const Interval(0.35, 0.75, curve: Curves.easeOut),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_startLiveAnalyzerIfPossible());
+      _openController.forward(from: 0);
     });
   }
 
@@ -73,6 +120,9 @@ class _ScannerPageState extends State<ScannerPage> {
         (widget.isCameraInitialized && !oldWidget.isCameraInitialized)) {
       _resetLiveState();
       unawaited(_restartLiveAnalyzer());
+      if (mounted) {
+        _openController.forward(from: 0);
+      }
     }
 
     if (!oldWidget.isAnalyzing && widget.isAnalyzing) {
@@ -98,6 +148,7 @@ class _ScannerPageState extends State<ScannerPage> {
   @override
   void dispose() {
     unawaited(_stopLiveAnalyzer());
+    _openController.dispose();
     super.dispose();
   }
 
@@ -134,6 +185,7 @@ class _ScannerPageState extends State<ScannerPage> {
         _isStreamRunning = true;
       }
       _streamController = controller;
+      _applyFlashMode();
       _liveAnalyzerAvailable = true;
     } catch (_) {
       _liveAnalyzerAvailable = false;
@@ -421,94 +473,38 @@ class _ScannerPageState extends State<ScannerPage> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: AppColors.scannerBg,
+      color: Colors.black,
       child: Stack(
         children: [
-          Column(
-            children: [
-              _buildHeader(),
-              Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final reservedControlsHeight =
-                        widget.capturedImages.isNotEmpty ? 130.0 : 116.0;
-                    final previewHeight =
-                        (constraints.maxHeight - reservedControlsHeight).clamp(
-                          170.0,
-                          constraints.maxHeight,
-                        );
-
-                    return Column(
-                      children: [
-                        SizedBox(
-                          height: previewHeight,
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-                            child: _buildCameraPreview(),
-                          ),
-                        ),
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.bottomCenter,
-                            child: _buildCaptureControls(),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _cameraFade,
+              child: SlideTransition(
+                position: _cameraSlide,
+                child: _buildCameraPreview(),
               ),
-            ],
+            ),
+          ),
+          Positioned.fill(
+            child: FadeTransition(
+              opacity: _overlayFade,
+              child: _buildOverlayStack(),
+            ),
+          ),
+          Positioned(
+            top: MediaQuery.of(context).padding.top + 8,
+            left: 16,
+            right: 16,
+            child: _buildTopBar(),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 24 + MediaQuery.of(context).padding.bottom,
+            child: _buildBottomControls(),
           ),
           if (_isBusy) _buildScanningOverlay(),
         ],
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _buildHeaderButton('✕ Cancel', widget.onCancel, !_isBusy),
-          Text(
-            widget.capturedImages.isEmpty
-                ? 'Document Scanner'
-                : '${widget.capturedImages.length} scanned',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
-          ),
-          _buildHeaderButton('Done', widget.onDone, !_isBusy),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildHeaderButton(String text, VoidCallback onTap, bool enabled) {
-    return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.45,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            text,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Colors.white,
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -526,25 +522,12 @@ class _ScannerPageState extends State<ScannerPage> {
         }
 
         return Center(
-          child: Container(
+          child: SizedBox(
             width: width,
             height: height,
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  activeController != null
-                      ? CameraPreview(activeController)
-                      : _buildCameraPlaceholder(),
-                  _buildViewfinderOverlay(),
-                ],
-              ),
-            ),
+            child: activeController != null
+                ? CameraPreview(activeController)
+                : _buildCameraPlaceholder(),
           ),
         );
       },
@@ -570,20 +553,23 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  Widget _buildViewfinderOverlay() {
+  Widget _buildOverlayStack() {
     final confidencePct = (_detectionConfidence * 100)
         .clamp(0, 100)
         .toStringAsFixed(0);
 
     return Stack(
       children: [
+        Positioned.fill(
+          child: ScanOverlay(detected: _isStable, showGrid: false, padding: 28),
+        ),
         Positioned(
-          top: 16,
-          left: 0,
-          right: 0,
+          top: 88,
+          left: 24,
+          right: 24,
           child: Center(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.45),
                 borderRadius: BorderRadius.circular(20),
@@ -601,9 +587,9 @@ class _ScannerPageState extends State<ScannerPage> {
           ),
         ),
         Positioned(
-          bottom: 14,
-          left: 0,
-          right: 0,
+          bottom: 160,
+          left: 24,
+          right: 24,
           child: Text(
             _isStable
                 ? (_autoCaptureEnabled
@@ -620,63 +606,251 @@ class _ScannerPageState extends State<ScannerPage> {
             ),
           ),
         ),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Center(
+              child: FadeTransition(
+                opacity: _focusOpacity,
+                child: ScaleTransition(
+                  scale: _focusScale,
+                  child: Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.5),
+                        width: 1.4,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
 
-  Widget _buildCaptureControls() {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        32,
-        8,
-        32,
-        bottomInset > 0 ? bottomInset - 4 : 12,
+  Widget _buildTopBar() {
+    return Row(
+      children: [
+        _buildTopIcon(Icons.close, widget.onCancel, tooltip: 'Close'),
+        const Spacer(),
+        _buildFlashToggle(),
+        const SizedBox(width: 10),
+        _buildQualityBadge(),
+        const SizedBox(width: 10),
+        _buildTopIcon(Icons.more_horiz, _showCameraMenu, tooltip: 'Menu'),
+      ],
+    );
+  }
+
+  Widget _buildTopIcon(IconData icon, VoidCallback onTap, {String? tooltip}) {
+    return GestureDetector(
+      onTap: _isBusy ? null : onTap,
+      child: Opacity(
+        opacity: _isBusy ? 0.5 : 1,
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: Icon(icon, size: 18, color: Colors.white),
+        ),
       ),
-      child: Column(
+    );
+  }
+
+  Widget _buildFlashToggle() {
+    IconData icon;
+    String label;
+    switch (_flashSetting) {
+      case _FlashSetting.on:
+        icon = Icons.flash_on;
+        label = 'On';
+      case _FlashSetting.off:
+        icon = Icons.flash_off;
+        label = 'Off';
+      case _FlashSetting.auto:
+        icon = Icons.flash_auto;
+        label = 'Auto';
+    }
+    return GestureDetector(
+      onTap: _isBusy ? null : _cycleFlashMode,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: Colors.white),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQualityBadge() {
+    return GestureDetector(
+      onTap: _isBusy ? null : _toggleQuality,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: _highQuality
+              ? Colors.white.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+        ),
+        child: Text(
+          _highQuality ? 'HD' : 'SD',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomControls() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildModeToggle(),
+        const SizedBox(height: 12),
+        _buildScanModeRow(),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildBottomIcon(Icons.photo_library, _onAddFromGallery),
+            _buildCaptureButton(),
+            _buildBottomIcon(
+              _autoCaptureEnabled ? Icons.auto_mode : Icons.touch_app,
+              _toggleAutoCapture,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomIcon(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: _isBusy ? null : onTap,
+      child: Opacity(
+        opacity: _isBusy ? 0.5 : 1,
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.35),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          ),
+          child: Icon(icon, size: 22, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModeToggle() {
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildCtrlButton(
-                Icons.photo_library_outlined,
-                _onAddFromGallery,
-                !_isBusy,
-              ),
-              _buildCaptureButton(),
-              _buildCtrlButton(
-                _autoCaptureEnabled ? Icons.auto_mode : Icons.touch_app,
-                _toggleAutoCapture,
-                !_isBusy,
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (widget.capturedImages.isNotEmpty)
-            Text(
-              '${widget.capturedImages.length} page(s) ready',
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
+          _buildModeChip('Single', !_batchMode, () {
+            setState(() => _batchMode = false);
+          }),
+          _buildModeChip('Batch', _batchMode, () {
+            setState(() => _batchMode = true);
+          }),
         ],
       ),
     );
   }
 
-  Widget _buildCtrlButton(IconData icon, VoidCallback onTap, bool enabled) {
+  Widget _buildModeChip(String label, bool selected, VoidCallback onTap) {
     return GestureDetector(
-      onTap: enabled ? onTap : null,
-      child: Opacity(
-        opacity: enabled ? 1 : 0.5,
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+      onTap: _isBusy ? null : onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.black : Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
-          child: Icon(icon, size: 22, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScanModeRow() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _buildScanModeChip('Color', _ScanMode.color),
+        const SizedBox(width: 8),
+        _buildScanModeChip('B&W', _ScanMode.bw),
+        const SizedBox(width: 8),
+        _buildScanModeChip('Grayscale', _ScanMode.grayscale),
+      ],
+    );
+  }
+
+  Widget _buildScanModeChip(String label, _ScanMode mode) {
+    final selected = _scanMode == mode;
+    return GestureDetector(
+      onTap: _isBusy ? null : () => setState(() => _scanMode = mode),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white : Colors.black.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.black : Colors.white70,
+          ),
         ),
       ),
     );
@@ -733,6 +907,101 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
+  void _showCameraMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildMenuTile('Scan Mode', _scanModeLabel()),
+                _buildMenuTile(
+                  'Auto Capture',
+                  _autoCaptureEnabled ? 'On' : 'Off',
+                ),
+                _buildMenuTile('Quality', _highQuality ? 'HD' : 'SD'),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuTile(String title, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.text,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 13, color: AppColors.text2),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _scanModeLabel() {
+    switch (_scanMode) {
+      case _ScanMode.color:
+        return 'Color';
+      case _ScanMode.bw:
+        return 'B&W';
+      case _ScanMode.grayscale:
+        return 'Grayscale';
+    }
+  }
+
+  void _toggleQuality() {
+    setState(() => _highQuality = !_highQuality);
+  }
+
+  void _cycleFlashMode() {
+    setState(() {
+      _flashSetting = switch (_flashSetting) {
+        _FlashSetting.auto => _FlashSetting.on,
+        _FlashSetting.on => _FlashSetting.off,
+        _FlashSetting.off => _FlashSetting.auto,
+      };
+    });
+    _applyFlashMode();
+  }
+
+  void _applyFlashMode() {
+    final controller = _activeController();
+    if (controller == null) return;
+    try {
+      final mode = switch (_flashSetting) {
+        _FlashSetting.auto => FlashMode.auto,
+        _FlashSetting.on => FlashMode.always,
+        _FlashSetting.off => FlashMode.off,
+      };
+      unawaited(controller.setFlashMode(mode));
+    } catch (_) {
+      // Ignore flash errors on unsupported devices.
+    }
+  }
+
   void _toggleAutoCapture() {
     setState(() {
       _autoCaptureEnabled = !_autoCaptureEnabled;
@@ -740,16 +1009,6 @@ class _ScannerPageState extends State<ScannerPage> {
       _autoCapturedSinceUnstable = false;
       _missingDocumentFrames = 0;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _autoCaptureEnabled
-              ? 'Auto capture enabled'
-              : 'Auto capture disabled',
-        ),
-        duration: const Duration(seconds: 1),
-      ),
-    );
   }
 
   Future<void> _onCapture({required bool autoTriggered}) async {
