@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.docts_scanner"
+    namespace = "come.alnomily.docts_scanner"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.docts_scanner"
+        applicationId = "come.alnomily.docts_scanner"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -33,6 +33,15 @@ android {
     lint {
         checkReleaseBuilds = false
         abortOnError = false
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("upload-keystore.jks")
+            storePassword = "12345688"
+            keyAlias = "userapp"
+            keyPassword = "12345688"
+        }
     }
 
     buildTypes {

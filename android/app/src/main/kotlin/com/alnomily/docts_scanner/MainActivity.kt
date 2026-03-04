@@ -1,4 +1,4 @@
-package com.example.docts_scanner
+package come.alnomily.docts_scanner
 
 import io.flutter.embedding.android.FlutterActivity
 

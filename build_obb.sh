@@ -54,13 +54,13 @@ BUILD_GRADLE="android/app/build.gradle.kts"
 if [ -f "$BUILD_GRADLE" ]; then
     APPLICATION_ID=$(grep "applicationId.*=" "$BUILD_GRADLE" | head -1 | sed 's/.*applicationId = "\(.*\)".*/\1/' | tr -d '"')
     if [ -z "$APPLICATION_ID" ]; then
-        APPLICATION_ID="com.example.docts_scanner"
+        APPLICATION_ID="come.alnomily.docts_scanner"
         echo -e "${YELLOW}Could not extract applicationId from build.gradle.kts, using default: $APPLICATION_ID${NC}"
     else
         echo -e "${BLUE}Using application ID: $APPLICATION_ID${NC}"
     fi
 else
-    APPLICATION_ID="com.example.docts_scanner"
+    APPLICATION_ID="come.alnomily.docts_scanner"
     echo -e "${YELLOW}build.gradle.kts not found, using default application ID: $APPLICATION_ID${NC}"
 fi
 
