@@ -104,21 +104,19 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  Future<void> _onScannerCapture() async {
+  Future<bool> _onScannerCapture() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
     final captured = await appState.captureImage();
     if (captured == null) {
       _showScannerError('No clear document detected. Try again.');
-      return;
+      return false;
     }
     final isValid = _validateLastCapturedDocument(beforeCount);
-    if (isValid) {
-      await _openEditFromScanner();
-    }
+    return isValid;
   }
 
-  Future<void> _onScannerAddFromGallery() async {
+  Future<bool> _onScannerAddFromGallery() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
     await appState.addImageFromGallery();
@@ -126,9 +124,7 @@ class _MainScreenState extends State<MainScreen> {
       beforeCount,
       errorMessage: 'Selected image is not a clear document. Try again.',
     );
-    if (isValid) {
-      await _openEditFromScanner();
-    }
+    return isValid;
   }
 
   bool _validateLastCapturedDocument(
@@ -155,17 +151,6 @@ class _MainScreenState extends State<MainScreen> {
       _showScannerError('Auto corners were weak. You can adjust in Edit.');
     }
     return true;
-  }
-
-  Future<void> _openEditFromScanner() async {
-    if (!mounted) return;
-    final appState = context.read<AppState>();
-    setState(() {
-      _showScanner = false;
-      _showEdit = true;
-      _showResult = false;
-    });
-    await appState.disposeCamera();
   }
 
   void _showScannerError(String message) {

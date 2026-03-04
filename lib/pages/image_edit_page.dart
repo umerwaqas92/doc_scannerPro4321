@@ -131,6 +131,27 @@ class _ImageEditPageState extends State<ImageEditPage> {
       return const Center(child: Text('No images'));
     }
 
+    final currentFile = _previewImages[_currentPage];
+    if (!currentFile.existsSync()) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+        child: Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: const Center(
+            child: Text(
+              'Image not available yet. Please retry.',
+              style: TextStyle(color: AppColors.text2),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
       child: Stack(
@@ -155,12 +176,17 @@ class _ImageEditPageState extends State<ImageEditPage> {
                 maxScale: 4.0,
                 child: Center(
                   child: Image.file(
-                    _previewImages[_currentPage],
+                    currentFile,
                     fit: BoxFit.contain,
                     gaplessPlayback: true,
                     filterQuality: FilterQuality.medium,
                     errorBuilder: (context, error, stackTrace) {
-                      return const Center(child: Text('Unable to load image'));
+                      return const Center(
+                        child: Text(
+                          'Unable to load image',
+                          style: TextStyle(color: AppColors.text2),
+                        ),
+                      );
                     },
                   ),
                 ),

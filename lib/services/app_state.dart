@@ -91,6 +91,8 @@ class AppState extends ChangeNotifier {
   Future<File?> captureImage() async {
     final image = await _cameraService.captureImage();
     if (image == null) return null;
+    if (!await image.exists()) return null;
+    if (await image.length() == 0) return null;
     await _addImageAndRunPipeline(image);
     return image;
   }
@@ -144,6 +146,8 @@ class AppState extends ChangeNotifier {
   Future<void> addImageFromGallery() async {
     final image = await _imagePickerService.pickFromGallery();
     if (image != null) {
+      if (!await image.exists()) return;
+      if (await image.length() == 0) return;
       await _addImageAndRunPipeline(image);
     }
   }
@@ -152,6 +156,8 @@ class AppState extends ChangeNotifier {
     final images = await _imagePickerService.pickMultipleFromGallery();
     if (images.isNotEmpty) {
       for (final image in images) {
+        if (!await image.exists()) continue;
+        if (await image.length() == 0) continue;
         await _addImageAndRunPipeline(image);
       }
     }
