@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/scan_pipeline_models.dart';
 import '../services/ocr_service.dart';
 import '../theme/app_theme.dart';
@@ -299,6 +300,23 @@ class _ScanResultPageState extends State<ScanResultPage>
                 'Page ${_currentPage + 1}',
                 style: const TextStyle(fontSize: 12, color: AppColors.text3),
               ),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: _textController.text));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Copied to clipboard'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+                child: const Icon(
+                  Icons.copy_all,
+                  size: 20,
+                  color: AppColors.text2,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -314,14 +332,16 @@ class _ScanResultPageState extends State<ScanResultPage>
               expands: true,
               textAlignVertical: TextAlignVertical.top,
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 15,
                 color: AppColors.text,
-                height: 1.6,
+                height: 1.4,
+                letterSpacing: 0.1,
               ),
               decoration: const InputDecoration(
                 border: InputBorder.none,
                 hintText: 'No text detected in this image',
                 hintStyle: TextStyle(color: AppColors.text3),
+                contentPadding: EdgeInsets.zero,
               ),
               onChanged: (value) => widget.onTextChanged(_currentPage, value),
             ),

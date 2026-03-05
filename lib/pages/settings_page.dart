@@ -3,17 +3,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 
 class SettingsPage extends StatelessWidget {
-  final bool autoCrop;
-  final String flashMode;
-  final Function(bool) onAutoCropChanged;
-  final Function(String) onFlashModeChanged;
-
   const SettingsPage({
     super.key,
-    required this.autoCrop,
-    required this.flashMode,
-    required this.onAutoCropChanged,
-    required this.onFlashModeChanged,
   });
 
   Future<void> _launchURL(String urlString) async {
@@ -32,16 +23,6 @@ class SettingsPage extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(),
-            _buildSection('Scan', [
-              _buildToggleRow(
-                Icons.document_scanner_outlined,
-                'Auto Crop',
-                'Detect edges automatically',
-                autoCrop,
-                onAutoCropChanged,
-              ),
-              _buildValueRow(Icons.wb_sunny_outlined, 'Flash Mode', flashMode),
-            ]),
             _buildSection('Account', [
               _buildNavRow(
                 Icons.security_outlined,
@@ -107,121 +88,6 @@ class SettingsPage extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppDimens.radiusSm),
             ),
             child: Column(children: children),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildToggleRow(
-    IconData icon,
-    String label,
-    String sub,
-    bool value,
-    Function(bool) onChanged,
-  ) {
-    return Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.surface2,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Icon(icon, size: 16, color: AppColors.text),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.text,
-                  ),
-                ),
-                Text(
-                  sub,
-                  style: const TextStyle(fontSize: 12, color: AppColors.text3),
-                ),
-              ],
-            ),
-          ),
-          GestureDetector(
-            onTap: () => onChanged(!value),
-            child: Container(
-              width: 44,
-              height: 26,
-              decoration: BoxDecoration(
-                color: value ? AppColors.text : AppColors.border,
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 200),
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  margin: const EdgeInsets.all(3),
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.2),
-                        blurRadius: 4,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildValueRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppColors.surface2,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Icon(icon, size: 16, color: AppColors.text),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.text,
-              ),
-            ),
-          ),
-          Row(
-            children: [
-              Text(
-                value,
-                style: const TextStyle(fontSize: 13, color: AppColors.text2),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.chevron_right, size: 16, color: AppColors.text3),
-            ],
           ),
         ],
       ),

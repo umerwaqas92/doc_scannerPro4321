@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
 import '../models/scan_pipeline_models.dart';
@@ -19,71 +21,56 @@ class OcrService {
 
     final generatedVariants = <File>[];
     try {
-      final candidates = <File>[];
+      // First, try OCR on the original images.
+      OcrResult? best;
+      
       for (final imageFile in imageFiles) {
         if (!await imageFile.exists()) continue;
-        candidates.add(imageFile);
-
-        final boosted = await _createOcrVariant(
-          imageFile,
-          tag: 'ocr_boost',
-          thresholded: false,
-        );
-        if (boosted != null) {
-          candidates.add(boosted);
-          generatedVariants.add(boosted);
-        }
-
-        final thresholded = await _createOcrVariant(
-          imageFile,
-          tag: 'ocr_bw',
-          thresholded: true,
-        );
-        if (thresholded != null) {
-          candidates.add(thresholded);
-          generatedVariants.add(thresholded);
-        }
-
-        final textBoost = await _createTextFocusedVariant(
-          imageFile,
-          tag: 'ocr_text_plus',
-        );
-        if (textBoost != null) {
-          candidates.add(textBoost);
-          generatedVariants.add(textBoost);
-        }
-
-        final upscaled = await _createUpscaledVariant(
-          imageFile,
-          tag: 'ocr_upscaled',
-        );
-        if (upscaled != null) {
-          candidates.add(upscaled);
-          generatedVariants.add(upscaled);
-        }
-      }
-
-      final seen = <String>{};
-      final deduped = <File>[];
-      for (final candidate in candidates) {
-        if (seen.add(candidate.path)) {
-          deduped.add(candidate);
-        }
-      }
-
-      OcrResult? best;
-      for (final imageFile in deduped) {
         final current = await _processSingleImage(imageFile);
-        if (!current.success) continue;
-
+        
+        if (current.success && current.confidence > 0.82) {
+          // If we got a very high confidence result, we can stop early.
+          return current;
+        }
+        
         if (best == null || current.confidence > best.confidence) {
           best = current;
         }
       }
 
-      if (best != null) {
+      // If confidence is low, only then try generating enhanced variants.
+      if (best == null || best.confidence < 0.75) {
+        final sourceForVariants = imageFiles.first; // Use the first available image
+        
+        final variantTags = ['ocr_text_plus', 'ocr_upscaled', 'ocr_boost'];
+        for (final tag in variantTags) {
+          File? variant;
+          if (tag == 'ocr_text_plus') {
+            variant = await _createTextFocusedVariant(sourceForVariants, tag: tag);
+          } else if (tag == 'ocr_upscaled') {
+            variant = await _createUpscaledVariant(sourceForVariants, tag: tag);
+          } else {
+            variant = await _createOcrVariant(sourceForVariants, tag: tag, thresholded: false);
+          }
+
+          if (variant != null) {
+            generatedVariants.add(variant);
+            final current = await _processSingleImage(variant);
+            if (current.success) {
+              if (best == null || current.confidence > best.confidence) {
+                best = current;
+              }
+              // If variant gives great results, stop.
+              if (current.confidence > 0.85) break;
+            }
+          }
+        }
+      }
+
+      if (best != null && best.success) {
         return best;
       }
+      
       return OcrResult(
         success: false,
         text: '',
@@ -106,7 +93,7 @@ class OcrService {
     final inputImage = InputImage.fromFile(imageFile);
     final recognizedText = await _textRecognizer.processImage(inputImage);
     final structuredText = _buildStructuredText(recognizedText);
-    final text = _fixCommonWords(_correctOcrErrors(structuredText));
+    final text = _normalizeText(_fixCommonWords(_correctOcrErrors(structuredText)));
 
     final blocks = recognizedText.blocks
         .map((block) {
@@ -130,19 +117,39 @@ class OcrService {
   }
 
   String _buildStructuredText(RecognizedText recognizedText) {
+    if (recognizedText.blocks.isEmpty) {
+      return recognizedText.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    }
+
     final blocks = <String>[];
     for (final block in recognizedText.blocks) {
-      final lines = block.lines
+      // Form a single paragraph from each detected block by joining lines with a space.
+      final blockText = block.lines
           .map((line) => line.text.trim())
-          .where((line) => line.isNotEmpty)
-          .toList(growable: false);
-      if (lines.isEmpty) continue;
-      blocks.add(lines.join('\n'));
+          .where((text) => text.isNotEmpty)
+          .join(' ');
+      
+      if (blockText.isNotEmpty) {
+        blocks.add(blockText);
+      }
     }
-    if (blocks.isEmpty) {
-      return recognizedText.text.trim();
-    }
-    return blocks.join('\n\n').trim();
+    
+    // Join blocks with a single newline to ensure "lined wise" structure without gaps.
+    // This removes the "distanced" feel the user complained about.
+    return blocks.join('\n').trim();
+  }
+
+  String _normalizeText(String text) {
+    // Collapsing all multiple newlines into a single newline for a very compact form.
+    String result = text.replaceAll(RegExp(r'\n+'), '\n');
+    
+    // Clean up multiple spaces within lines
+    result = result.replaceAll(RegExp(r'[ \t]{2,}'), ' ');
+    
+    // Fix hyphenation at line breaks
+    result = result.replaceAll(RegExp(r'(\w)-\n\s*(\w)'), r'$1$2');
+    
+    return result.trim();
   }
 
   double _scoreRecognizedText(String text, List<TextBlock> blocks) {
@@ -237,28 +244,42 @@ class OcrService {
   }) async {
     try {
       final bytes = await source.readAsBytes();
-      var image = img.decodeImage(bytes);
-      if (image == null) return null;
-
-      image = img.bakeOrientation(image);
-      image = img.grayscale(image);
-      image = img.gaussianBlur(image, radius: 1);
-
-      if (thresholded) {
-        image = img.adjustColor(image, contrast: 1.95, brightness: 1.12);
-        image = img.luminanceThreshold(image, threshold: 0.52);
-      } else {
-        image = img.adjustColor(image, contrast: 1.45, brightness: 1.08);
-      }
+      final resultBytes = await compute(_ocrVariantWorker, {
+        'bytes': bytes,
+        'thresholded': thresholded,
+      });
+      
+      if (resultBytes == null) return null;
 
       final tempFile = File(
         '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',
       );
-      await tempFile.writeAsBytes(img.encodeJpg(image, quality: 95));
+      await tempFile.writeAsBytes(resultBytes);
       return tempFile;
     } catch (_) {
       return null;
     }
+  }
+
+  static Uint8List? _ocrVariantWorker(Map<String, dynamic> params) {
+    final Uint8List bytes = params['bytes'];
+    final bool thresholded = params['thresholded'];
+    
+    var image = img.decodeImage(bytes);
+    if (image == null) return null;
+
+    image = img.bakeOrientation(image);
+    image = img.grayscale(image);
+    image = img.gaussianBlur(image, radius: 1);
+
+    if (thresholded) {
+      image = img.adjustColor(image, contrast: 1.95, brightness: 1.12);
+      image = img.luminanceThreshold(image, threshold: 0.52);
+    } else {
+      image = img.adjustColor(image, contrast: 1.45, brightness: 1.08);
+    }
+
+    return img.encodeJpg(image, quality: 95);
   }
 
   Future<File?> _createTextFocusedVariant(
@@ -267,23 +288,31 @@ class OcrService {
   }) async {
     try {
       final bytes = await source.readAsBytes();
-      var image = img.decodeImage(bytes);
-      if (image == null) return null;
-
-      image = img.bakeOrientation(image);
-      image = img.grayscale(image);
-      image = img.adjustColor(image, contrast: 2.1, brightness: 1.08);
-      image = img.gaussianBlur(image, radius: 1);
-      image = img.luminanceThreshold(image, threshold: 0.5);
+      final resultBytes = await compute(_textFocusedWorker, bytes);
+      
+      if (resultBytes == null) return null;
 
       final tempFile = File(
         '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',
       );
-      await tempFile.writeAsBytes(img.encodeJpg(image, quality: 96));
+      await tempFile.writeAsBytes(resultBytes);
       return tempFile;
     } catch (_) {
       return null;
     }
+  }
+
+  static Uint8List? _textFocusedWorker(Uint8List bytes) {
+    var image = img.decodeImage(bytes);
+    if (image == null) return null;
+
+    image = img.bakeOrientation(image);
+    image = img.grayscale(image);
+    image = img.adjustColor(image, contrast: 2.1, brightness: 1.08);
+    image = img.gaussianBlur(image, radius: 1);
+    image = img.luminanceThreshold(image, threshold: 0.5);
+
+    return img.encodeJpg(image, quality: 96);
   }
 
   Future<File?> _createUpscaledVariant(
@@ -292,31 +321,39 @@ class OcrService {
   }) async {
     try {
       final bytes = await source.readAsBytes();
-      var image = img.decodeImage(bytes);
-      if (image == null) return null;
-
-      image = img.bakeOrientation(image);
-      final longest = image.width > image.height ? image.width : image.height;
-      if (longest < 1800) {
-        final scale = 1800 / longest;
-        image = img.copyResize(
-          image,
-          width: (image.width * scale).round(),
-          height: (image.height * scale).round(),
-          interpolation: img.Interpolation.cubic,
-        );
-      }
-      image = img.grayscale(image);
-      image = img.adjustColor(image, contrast: 1.65, brightness: 1.04);
+      final resultBytes = await compute(_upscaleWorker, bytes);
+      
+      if (resultBytes == null) return null;
 
       final tempFile = File(
         '${Directory.systemTemp.path}/ocr_${DateTime.now().microsecondsSinceEpoch}_$tag.jpg',
       );
-      await tempFile.writeAsBytes(img.encodeJpg(image, quality: 96));
+      await tempFile.writeAsBytes(resultBytes);
       return tempFile;
     } catch (_) {
       return null;
     }
+  }
+
+  static Uint8List? _upscaleWorker(Uint8List bytes) {
+    var image = img.decodeImage(bytes);
+    if (image == null) return null;
+
+    image = img.bakeOrientation(image);
+    final longest = image.width > image.height ? image.width : image.height;
+    if (longest < 1800) {
+      final scale = 1800 / longest;
+      image = img.copyResize(
+        image,
+        width: (image.width * scale).round(),
+        height: (image.height * scale).round(),
+        interpolation: img.Interpolation.cubic,
+      );
+    }
+    image = img.grayscale(image);
+    image = img.adjustColor(image, contrast: 1.65, brightness: 1.04);
+
+    return img.encodeJpg(image, quality: 96);
   }
 
   void dispose() {

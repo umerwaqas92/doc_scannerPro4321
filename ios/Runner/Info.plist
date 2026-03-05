@@ -26,6 +26,14 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs camera access to scan documents</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access for video recording</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This app needs permission to save scanned documents to your photo library</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs photo library access to import documents</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -45,13 +53,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>This app needs camera access to scan documents</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>This app needs photo library access to import documents</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>This app needs permission to save scanned documents to your photo library</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>This app needs microphone access for video recording</string>
 </dict>
 </plist>

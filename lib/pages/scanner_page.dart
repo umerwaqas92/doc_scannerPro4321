@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
@@ -17,6 +18,8 @@ class ScannerPage extends StatefulWidget {
   final String? analysisStageText;
   final List<File> capturedImages;
   final List<File> batchImages;
+  final String flashMode;
+  final ValueChanged<String> onFlashModeChanged;
 
   const ScannerPage({
     super.key,
@@ -31,6 +34,8 @@ class ScannerPage extends StatefulWidget {
     required this.analysisStageText,
     required this.capturedImages,
     required this.batchImages,
+    required this.flashMode,
+    required this.onFlashModeChanged,
   });
 
   @override
@@ -38,6 +43,13 @@ class ScannerPage extends StatefulWidget {
 }
 
 enum _FlashSetting { auto, on, off }
+enum _ScannerPhase {
+  detecting,
+  ready,
+  capturing,
+  analyzingLocked,
+  cooldown,
+}
 
 class _ScannerPageState extends State<ScannerPage>
     with TickerProviderStateMixin {
@@ -47,12 +59,9 @@ class _ScannerPageState extends State<ScannerPage>
   bool _isStartingStream = false;
   bool _isFrameProcessing = false;
   bool _liveAnalyzerAvailable = true;
-  bool _autoCaptureEnabled = false;
-  bool _autoCapturedSinceUnstable = false;
-  bool _awaitingDocumentMoveAfterAutoCapture = false;
-  bool _isAdjustingFocus = false;
   bool _batchMode = false;
   _FlashSetting _flashSetting = _FlashSetting.auto;
+  _ScannerPhase _scannerPhase = _ScannerPhase.detecting;
 
   late final AnimationController _openController;
   late final Animation<double> _cameraFade;
@@ -70,8 +79,7 @@ class _ScannerPageState extends State<ScannerPage>
 
   double _detectionConfidence = 0.0;
   String _liveStatus = 'Searching for document...';
-  DateTime _lastAutoCaptureAt = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _lastFocusAdjustAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _cooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
   CameraController? _streamController;
   List<int>? _lastMotionSamples;
   File? _lastCapturedImage;
@@ -79,6 +87,7 @@ class _ScannerPageState extends State<ScannerPage>
   Offset? _thumbEnd;
 
   bool get _isBusy => _isCaptureActionPending || widget.isAnalyzing;
+  bool get _isInCooldown => DateTime.now().isBefore(_cooldownUntil);
   List<File> get _activeImages =>
       _batchMode ? widget.batchImages : widget.capturedImages;
 
@@ -126,6 +135,7 @@ class _ScannerPageState extends State<ScannerPage>
       vsync: this,
       duration: const Duration(milliseconds: 260),
     );
+    _flashSetting = _flashSettingFromString(widget.flashMode);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_startLiveAnalyzerIfPossible());
       _openController.forward(from: 0);
@@ -144,11 +154,24 @@ class _ScannerPageState extends State<ScannerPage>
         _openController.forward(from: 0);
       }
     }
+    if (widget.flashMode != oldWidget.flashMode) {
+      _flashSetting = _flashSettingFromString(widget.flashMode);
+      _applyFlashMode();
+    }
 
     if (!oldWidget.isAnalyzing && widget.isAnalyzing) {
+      _scannerPhase = _ScannerPhase.analyzingLocked;
       unawaited(_stopLiveAnalyzer());
     }
     if (oldWidget.isAnalyzing && !widget.isAnalyzing) {
+      if (mounted) {
+        setState(() {
+          _scannerPhase = _ScannerPhase.detecting;
+          _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 550));
+        });
+      } else {
+        _scannerPhase = _ScannerPhase.detecting;
+      }
       unawaited(_startLiveAnalyzerIfPossible());
     }
 
@@ -160,7 +183,6 @@ class _ScannerPageState extends State<ScannerPage>
         : widget.capturedImages.length;
     if (newCount > previousCount) {
       _stableFrameCount = 0;
-      _autoCapturedSinceUnstable = false;
       _isStable = false;
       _liveStatus = 'Searching for document...';
       _detectionConfidence = 0;
@@ -186,16 +208,21 @@ class _ScannerPageState extends State<ScannerPage>
     _frameTick = 0;
     _detectionConfidence = 0;
     _liveStatus = 'Searching for document...';
-    _autoCapturedSinceUnstable = false;
-    _awaitingDocumentMoveAfterAutoCapture = false;
     _missingDocumentFrames = 0;
     _lastMotionSamples = null;
     _lastCapturedImage = null;
+    _scannerPhase = _ScannerPhase.detecting;
+    _cooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   Future<void> _restartLiveAnalyzer() async {
     await _stopLiveAnalyzer();
     await _startLiveAnalyzerIfPossible();
+  }
+
+  void _setCooldown([int ms = 900]) {
+    _cooldownUntil = DateTime.now().add(Duration(milliseconds: ms));
+    _scannerPhase = _ScannerPhase.cooldown;
   }
 
   Future<void> _startLiveAnalyzerIfPossible() async {
@@ -275,8 +302,6 @@ class _ScannerPageState extends State<ScannerPage>
         _isStable = false;
         _detectionConfidence = 0;
         _liveStatus = 'Camera blocked. Try again.';
-        _autoCapturedSinceUnstable = false;
-        _awaitingDocumentMoveAfterAutoCapture = false;
         _missingDocumentFrames++;
         if (mounted && _frameTick % 6 == 0) {
           setState(() {});
@@ -294,50 +319,27 @@ class _ScannerPageState extends State<ScannerPage>
       }
 
       final previousStable = _isStable;
-      if (candidate && confidence > 0.45 && motionScore < 0.08) {
+      if (candidate && confidence > 0.44 && motionScore < 0.11) {
         _stableFrameCount = math.min(_stableFrameCount + 1, 36);
       } else {
         _stableFrameCount = math.max(_stableFrameCount - 2, 0);
       }
 
-      final stableNow = _stableFrameCount >= 10;
-
-      // Require document movement after an auto-capture before next auto shot.
-      if (_awaitingDocumentMoveAfterAutoCapture &&
-          _missingDocumentFrames >= 8) {
-        _awaitingDocumentMoveAfterAutoCapture = false;
-        _autoCapturedSinceUnstable = false;
-      }
-      if (!stableNow && !_awaitingDocumentMoveAfterAutoCapture) {
-        _autoCapturedSinceUnstable = false;
-      }
+      final stableNow = _stableFrameCount >= 6;
 
       String status;
-      if (_awaitingDocumentMoveAfterAutoCapture) {
-        status = 'Move to next page for auto capture';
+      if (_isInCooldown) {
+        _scannerPhase = _ScannerPhase.cooldown;
+        status = 'Preparing next capture...';
       } else if (stableNow) {
-        if (_autoCaptureEnabled) {
-          status = 'Perfect shot ready';
-        } else {
-          status = 'Document locked';
-        }
+        _scannerPhase = _ScannerPhase.ready;
+        status = 'Document locked';
       } else if (candidate) {
-        if (_autoCaptureEnabled) {
-          status = motionScore < 0.12
-              ? 'Focusing... hold steady'
-              : 'Hold steady';
-        } else {
-          status = motionScore < 0.12 ? 'Hold steady...' : 'Stabilizing...';
-        }
+        _scannerPhase = _ScannerPhase.detecting;
+        status = motionScore < 0.12 ? 'Hold steady...' : 'Stabilizing...';
       } else {
+        _scannerPhase = _ScannerPhase.detecting;
         status = 'Searching for document...';
-      }
-
-      if (_autoCaptureEnabled &&
-          candidate &&
-          confidence >= 0.50 &&
-          _frameTick % 8 == 0) {
-        unawaited(_maybeRefocusCenter());
       }
 
       final shouldRebuild = stableNow != previousStable || _frameTick % 6 == 0;
@@ -352,49 +354,10 @@ class _ScannerPageState extends State<ScannerPage>
         _detectionConfidence = confidence;
         _liveStatus = status;
       }
-
-      if (_autoCaptureEnabled &&
-          stableNow &&
-          _stableFrameCount >= 12 &&
-          confidence >= 0.62 &&
-          motionScore < 0.08 &&
-          !_autoCapturedSinceUnstable &&
-          !_awaitingDocumentMoveAfterAutoCapture &&
-          !_isBusy) {
-        final now = DateTime.now();
-        final elapsed = now.difference(_lastAutoCaptureAt).inMilliseconds;
-        if (elapsed > 1800) {
-          _autoCapturedSinceUnstable = true;
-          _awaitingDocumentMoveAfterAutoCapture = true;
-          _lastAutoCaptureAt = now;
-          unawaited(_onCapture(autoTriggered: true));
-        }
-      }
     } catch (_) {
       // keep scanner responsive even if one frame fails.
     } finally {
       _isFrameProcessing = false;
-    }
-  }
-
-  Future<void> _maybeRefocusCenter() async {
-    if (_isAdjustingFocus || !_autoCaptureEnabled || _isBusy) return;
-    final now = DateTime.now();
-    if (now.difference(_lastFocusAdjustAt).inMilliseconds < 900) return;
-    final controller = _activeController();
-    if (controller == null) return;
-
-    _isAdjustingFocus = true;
-    _lastFocusAdjustAt = now;
-    try {
-      await controller.setFocusMode(FocusMode.auto);
-      await controller.setExposureMode(ExposureMode.auto);
-      await controller.setFocusPoint(const Offset(0.5, 0.5));
-      await controller.setExposurePoint(const Offset(0.5, 0.5));
-    } catch (_) {
-      // Ignore focus point failures on unsupported devices.
-    } finally {
-      _isAdjustingFocus = false;
     }
   }
 
@@ -421,7 +384,7 @@ class _ScannerPageState extends State<ScannerPage>
     final y1 = (height * 0.84).round();
 
     final motionSamples = <int>[];
-    const motionGrid = 5;
+    const motionGrid = 4;
     final motionSpanX = math.max(1, x1 - x0);
     final motionSpanY = math.max(1, y1 - y0);
     for (int gy = 0; gy < motionGrid; gy++) {
@@ -436,7 +399,7 @@ class _ScannerPageState extends State<ScannerPage>
       }
     }
 
-    final step = (width ~/ 96).clamp(2, 10);
+    final step = (width ~/ 72).clamp(3, 12);
 
     double edgeSum = 0;
     double lumaSum = 0;
@@ -569,7 +532,7 @@ class _ScannerPageState extends State<ScannerPage>
           if (_lastCapturedImage != null && _batchMode)
             _buildThumbnailFlight(context),
           Positioned.fill(child: _buildFlashOverlay()),
-          if (_isBusy && !_batchMode) _buildScanningOverlay(),
+          if (_isBusy) _buildScanningOverlay(),
         ],
       ),
     );
@@ -591,12 +554,42 @@ class _ScannerPageState extends State<ScannerPage>
           child: SizedBox(
             width: width,
             height: height,
-            child: activeController != null
+            child: _isBusy
+                ? _buildCameraBlockedPreview()
+                : activeController != null
                 ? CameraPreview(activeController)
                 : _buildCameraPlaceholder(),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCameraBlockedPreview() {
+    final activeController = _activeController();
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (activeController != null) CameraPreview(activeController),
+        ClipRect(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.65),
+              alignment: Alignment.center,
+              child: Text(
+                widget.isAnalyzing ? 'Analyzing capture...' : 'Capturing...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -620,9 +613,20 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildOverlayStack() {
+    if (_isBusy) return const SizedBox.shrink();
+
     final confidencePct = (_detectionConfidence * 100)
         .clamp(0, 100)
         .toStringAsFixed(0);
+    final phaseColor = switch (_scannerPhase) {
+      _ScannerPhase.ready => AppColors.green,
+      _ScannerPhase.cooldown => Colors.white70,
+      _ => Colors.white,
+    };
+    final guidance = switch (_scannerPhase) {
+      _ScannerPhase.cooldown => 'Preparing next capture...',
+      _ => _isStable ? 'Hold steady and tap capture' : 'Tap capture anytime',
+    };
 
     return Stack(
       children: [
@@ -643,7 +647,7 @@ class _ScannerPageState extends State<ScannerPage>
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: _isStable ? AppColors.green : Colors.white,
+                  color: phaseColor,
                 ),
               ),
             ),
@@ -654,30 +658,22 @@ class _ScannerPageState extends State<ScannerPage>
           left: 24,
           right: 24,
           child: Text(
-            _isStable
-                ? (_autoCaptureEnabled
-                      ? 'Hold steady • auto-capture enabled'
-                      : 'Hold steady and tap capture')
-                : (_autoCaptureEnabled
-                      ? 'Align page for perfect auto shot'
-                      : 'Tap capture anytime'),
+            guidance,
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
-              color: _isStable ? AppColors.green : Colors.white54,
-              fontWeight: _isStable ? FontWeight.w600 : FontWeight.normal,
+              color: _scannerPhase == _ScannerPhase.ready
+                  ? AppColors.green
+                  : Colors.white54,
+              fontWeight: _scannerPhase == _ScannerPhase.detecting
+                  ? FontWeight.normal
+                  : FontWeight.w600,
             ),
           ),
         ),
         if (_batchMode && _activeImages.isNotEmpty)
           Positioned(left: 16, bottom: 120, child: _buildBatchCounter()),
-        if (_autoCaptureEnabled && !_isStable && !_batchMode)
-          Positioned(
-            bottom: 200,
-            left: 24,
-            right: 24,
-            child: _buildLiveAnalyzingChip(),
-          ),
+        // Live analyzing chip removed per request.
         Positioned.fill(
           child: IgnorePointer(
             child: Center(
@@ -815,10 +811,7 @@ class _ScannerPageState extends State<ScannerPage>
           children: [
             _buildBottomIcon(Icons.photo_library, _onAddFromGallery),
             _buildCaptureButton(),
-            _buildBottomIcon(
-              _autoCaptureEnabled ? Icons.auto_mode : Icons.touch_app,
-              _toggleAutoCapture,
-            ),
+            const SizedBox(width: 48, height: 48),
           ],
         ),
       ],
@@ -871,40 +864,6 @@ class _ScannerPageState extends State<ScannerPage>
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLiveAnalyzingChip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: AppColors.green.withValues(alpha: 0.9),
-            ),
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            'Analyzing frame…',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -1058,7 +1017,7 @@ class _ScannerPageState extends State<ScannerPage>
 
   Widget _buildCaptureButton() {
     return GestureDetector(
-      onTap: _isBusy ? null : () => _onCapture(autoTriggered: false),
+      onTap: _isBusy ? null : _onCapture,
       child: Opacity(
         opacity: _isBusy ? 0.6 : 1,
         child: Container(
@@ -1117,6 +1076,7 @@ class _ScannerPageState extends State<ScannerPage>
         _FlashSetting.off => _FlashSetting.auto,
       };
     });
+    widget.onFlashModeChanged(_flashSettingLabel(_flashSetting));
     _applyFlashMode();
   }
 
@@ -1135,42 +1095,17 @@ class _ScannerPageState extends State<ScannerPage>
     }
   }
 
-  void _toggleAutoCapture() {
-    setState(() {
-      _autoCaptureEnabled = !_autoCaptureEnabled;
-      _awaitingDocumentMoveAfterAutoCapture = false;
-      _autoCapturedSinceUnstable = false;
-      _missingDocumentFrames = 0;
-    });
-  }
-
-  Future<void> _onCapture({required bool autoTriggered}) async {
+  Future<void> _onCapture() async {
     if (_isBusy) return;
     final beforeCount = _activeImages.length;
 
-    final manualAutoModeBlocked =
-        _autoCaptureEnabled &&
-        _liveAnalyzerAvailable &&
-        !_isStable &&
-        !autoTriggered;
-    if (manualAutoModeBlocked) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Auto mode: wait for perfect shot or disable Auto'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
     setState(() {
       _isCaptureActionPending = true;
+      _scannerPhase = _ScannerPhase.capturing;
       _isStable = false;
       _stableFrameCount = 0;
       _detectionConfidence = 0;
-      _liveStatus = autoTriggered
-          ? 'Auto capture in progress...'
-          : 'Capturing image...';
+      _liveStatus = 'Capturing image...';
     });
 
     await _stopLiveAnalyzer();
@@ -1183,17 +1118,20 @@ class _ScannerPageState extends State<ScannerPage>
         capturedAdded = _activeImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
+          if (widget.isAnalyzing) {
+            _scannerPhase = _ScannerPhase.analyzingLocked;
+          } else {
+            _setCooldown();
+          }
           _liveStatus = capturedAdded && _batchMode
               ? 'Page ${_activeImages.length} added'
               : 'Searching for document...';
-          if (autoTriggered && capturedAdded) {
-            _autoCapturedSinceUnstable = true;
-          }
         });
       }
     }
     if (!mounted) return;
     if (capturedAdded && !_batchMode) {
+      _triggerCaptureFeedback();
       widget.onDone();
       return;
     }
@@ -1203,9 +1141,6 @@ class _ScannerPageState extends State<ScannerPage>
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
-    if (autoTriggered && capturedAdded) {
-      _awaitingDocumentMoveAfterAutoCapture = true;
-    }
   }
 
   Future<void> _onAddFromGallery() async {
@@ -1213,6 +1148,7 @@ class _ScannerPageState extends State<ScannerPage>
     final beforeCount = _activeImages.length;
     setState(() {
       _isCaptureActionPending = true;
+      _scannerPhase = _ScannerPhase.capturing;
       _isStable = false;
       _stableFrameCount = 0;
       _detectionConfidence = 0;
@@ -1229,6 +1165,11 @@ class _ScannerPageState extends State<ScannerPage>
         capturedAdded = _activeImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
+          if (widget.isAnalyzing) {
+            _scannerPhase = _ScannerPhase.analyzingLocked;
+          } else {
+            _setCooldown();
+          }
           _liveStatus = capturedAdded && _batchMode
               ? 'Page ${_activeImages.length} added'
               : 'Searching for document...';
@@ -1241,14 +1182,14 @@ class _ScannerPageState extends State<ScannerPage>
       return;
     }
     if (capturedAdded && _batchMode) {
-      _triggerCaptureFeedback();
+      _triggerCaptureFeedback(gallery: true);
     }
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
   }
 
-  void _triggerCaptureFeedback() {
+  void _triggerCaptureFeedback({bool gallery = false}) {
     if (!mounted) return;
     _flashController.forward(from: 0).then((_) {
       if (mounted) {
@@ -1259,7 +1200,31 @@ class _ScannerPageState extends State<ScannerPage>
     _lastCapturedImage = _activeImages.last;
     _thumbStart = null;
     _thumbEnd = null;
-    _thumbController.forward(from: 0);
+    if (_batchMode && !gallery) {
+      _thumbController.forward(from: 0);
+    }
+  }
+
+  _FlashSetting _flashSettingFromString(String value) {
+    switch (value.trim().toLowerCase()) {
+      case 'on':
+        return _FlashSetting.on;
+      case 'off':
+        return _FlashSetting.off;
+      default:
+        return _FlashSetting.auto;
+    }
+  }
+
+  String _flashSettingLabel(_FlashSetting setting) {
+    switch (setting) {
+      case _FlashSetting.on:
+        return 'On';
+      case _FlashSetting.off:
+        return 'Off';
+      case _FlashSetting.auto:
+        return 'Auto';
+    }
   }
 
   Widget _buildScanningOverlay() {
@@ -1269,32 +1234,9 @@ class _ScannerPageState extends State<ScannerPage>
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(
-              width: 120,
-              height: 120,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox(
-                    width: 90,
-                    height: 90,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: AppColors.green.withValues(alpha: 0.35),
-                    ),
-                  ),
-                  const Icon(
-                    Icons.document_scanner_outlined,
-                    size: 48,
-                    color: Colors.white,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Analyzing document...',
-              style: TextStyle(
+            Text(
+              widget.isAnalyzing ? 'Analyzing document...' : 'Capturing image...',
+              style: const TextStyle(
                 color: Colors.white,
                 fontSize: 20,
                 fontWeight: FontWeight.w600,
@@ -1304,16 +1246,6 @@ class _ScannerPageState extends State<ScannerPage>
             Text(
               widget.analysisStageText ?? 'Processing image',
               style: const TextStyle(color: Colors.white70, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: 220,
-              child: LinearProgressIndicator(
-                backgroundColor: Colors.white24,
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppColors.green,
-                ),
-              ),
             ),
           ],
         ),

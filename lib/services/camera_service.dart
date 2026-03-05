@@ -9,6 +9,7 @@ class CameraService {
   bool _isInitialized = false;
   String? _errorMessage;
   bool _isCapturing = false;
+  FlashMode _currentFlashMode = FlashMode.auto;
 
   bool get isInitialized => _isInitialized;
   CameraController? get controller => _controller;
@@ -97,10 +98,10 @@ class CameraService {
     if (_controller == null || !_controller!.value.isInitialized) return;
 
     try {
-      await _controller!.setFlashMode(FlashMode.auto);
+      await _controller!.setFlashMode(_currentFlashMode);
       await _controller!.setFocusMode(FocusMode.auto);
       await _controller!.setExposureMode(ExposureMode.auto);
-      debugPrint('Applied document settings: Flash auto');
+      debugPrint('Applied document settings: Flash ${_currentFlashMode.name}');
     } catch (e) {
       debugPrint('Could not apply camera settings: $e');
     }
@@ -117,7 +118,7 @@ class CameraService {
     _isCapturing = true;
 
     try {
-      await _controller!.setFlashMode(FlashMode.auto);
+      await _controller!.setFlashMode(_currentFlashMode);
 
       await Future.delayed(const Duration(milliseconds: 100));
 
@@ -146,6 +147,7 @@ class CameraService {
   }
 
   Future<void> setFlashMode(FlashMode mode) async {
+    _currentFlashMode = mode;
     if (_controller != null && _controller!.value.isInitialized) {
       try {
         await _controller!.setFlashMode(mode);

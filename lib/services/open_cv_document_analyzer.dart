@@ -17,17 +17,23 @@ class OpenCvDocumentAnalyzer {
     if (decoded == null) {
       return _fallbackForSize(1000, 1400);
     }
+    return detectDocumentInImage(decoded, minConfidence: minConfidence);
+  }
 
-    final scaled = _resizeForAnalysis(decoded, maxDim: 1200);
+  DetectedDocument detectDocumentInImage(
+    img.Image source, {
+    double minConfidence = 0.5,
+  }) {
+    final scaled = _resizeForAnalysis(source, maxDim: 1200);
     final prepared = _prepareForDetection(scaled);
     final edges = _buildEdgeMask(prepared);
     if (edges.edgeCount == 0) {
-      return _fallbackForSize(decoded.width, decoded.height);
+      return _fallbackForSize(source.width, source.height);
     }
 
     final candidates = _extractRectangleCandidates(edges);
     if (candidates.isEmpty) {
-      return _fallbackForSize(decoded.width, decoded.height);
+      return _fallbackForSize(source.width, source.height);
     }
 
     _RectCandidate best = candidates.first;
@@ -42,17 +48,17 @@ class OpenCvDocumentAnalyzer {
       refined,
       fromWidth: scaled.width,
       fromHeight: scaled.height,
-      toWidth: decoded.width,
-      toHeight: decoded.height,
+      toWidth: source.width,
+      toHeight: source.height,
     );
-    if (!_cornersLookValid(corners, decoded.width, decoded.height)) {
-      return _fallbackForSize(decoded.width, decoded.height);
+    if (!_cornersLookValid(corners, source.width, source.height)) {
+      return _fallbackForSize(source.width, source.height);
     }
 
     final geometryConfidence = _computeGeometryConfidence(
       corners,
-      imageWidth: decoded.width,
-      imageHeight: decoded.height,
+      imageWidth: source.width,
+      imageHeight: source.height,
       edgeCount: best.edgeCount,
       analyzedWidth: scaled.width,
       analyzedHeight: scaled.height,
@@ -63,7 +69,7 @@ class OpenCvDocumentAnalyzer {
     );
 
     if (confidence < minConfidence) {
-      final fallback = _fallbackForSize(decoded.width, decoded.height);
+      final fallback = _fallbackForSize(source.width, source.height);
       return DetectedDocument(
         corners: fallback.corners,
         confidence: confidence,
