@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
@@ -565,17 +566,30 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildCameraBlockedPreview() {
-    return Container(
-      color: Colors.black,
-      alignment: Alignment.center,
-      child: Text(
-        widget.isAnalyzing ? 'Analyzing capture...' : 'Capturing...',
-        style: const TextStyle(
-          color: Colors.white70,
-          fontSize: 14,
-          fontWeight: FontWeight.w600,
+    final activeController = _activeController();
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (activeController != null) CameraPreview(activeController),
+        ClipRect(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 12.0, sigmaY: 12.0),
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.65),
+              alignment: Alignment.center,
+              child: Text(
+                widget.isAnalyzing ? 'Analyzing capture...' : 'Capturing...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -599,6 +613,8 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildOverlayStack() {
+    if (_isBusy) return const SizedBox.shrink();
+
     final confidencePct = (_detectionConfidence * 100)
         .clamp(0, 100)
         .toStringAsFixed(0);
@@ -1166,14 +1182,14 @@ class _ScannerPageState extends State<ScannerPage>
       return;
     }
     if (capturedAdded && _batchMode) {
-      _triggerCaptureFeedback();
+      _triggerCaptureFeedback(gallery: true);
     }
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
   }
 
-  void _triggerCaptureFeedback() {
+  void _triggerCaptureFeedback({bool gallery = false}) {
     if (!mounted) return;
     _flashController.forward(from: 0).then((_) {
       if (mounted) {
@@ -1184,7 +1200,7 @@ class _ScannerPageState extends State<ScannerPage>
     _lastCapturedImage = _activeImages.last;
     _thumbStart = null;
     _thumbEnd = null;
-    if (_batchMode) {
+    if (_batchMode && !gallery) {
       _thumbController.forward(from: 0);
     }
   }
