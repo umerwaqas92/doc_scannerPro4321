@@ -60,6 +60,7 @@ class _ScannerPageState extends State<ScannerPage>
   bool _isFrameProcessing = false;
   bool _liveAnalyzerAvailable = true;
   bool _batchMode = false;
+  bool _isGalleryAction = false;
   _FlashSetting _flashSetting = _FlashSetting.auto;
   _ScannerPhase _scannerPhase = _ScannerPhase.detecting;
 
@@ -167,10 +168,12 @@ class _ScannerPageState extends State<ScannerPage>
       if (mounted) {
         setState(() {
           _scannerPhase = _ScannerPhase.detecting;
+          _isGalleryAction = false;
           _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 550));
         });
       } else {
         _scannerPhase = _ScannerPhase.detecting;
+        _isGalleryAction = false;
       }
       unawaited(_startLiveAnalyzerIfPossible());
     }
@@ -184,9 +187,20 @@ class _ScannerPageState extends State<ScannerPage>
     if (newCount > previousCount) {
       _stableFrameCount = 0;
       _isStable = false;
-      _liveStatus = 'Searching for document...';
       _detectionConfidence = 0;
       _missingDocumentFrames = 0;
+      
+      if (_isGalleryAction) {
+        _liveStatus = 'Page $newCount added from gallery';
+      } else {
+        _liveStatus = 'Searching for document...';
+      }
+      
+      // Trigger flight animation for gallery imports
+      if (_isGalleryAction && _batchMode) {
+        _triggerCaptureFeedback(isGallery: true);
+      }
+      
       if (mounted) {
         setState(() {});
       }
@@ -532,7 +546,7 @@ class _ScannerPageState extends State<ScannerPage>
           if (_lastCapturedImage != null && _batchMode)
             _buildThumbnailFlight(context),
           Positioned.fill(child: _buildFlashOverlay()),
-          if (_isBusy) _buildScanningOverlay(),
+          if (_isBusy && !_isGalleryAction) _buildScanningOverlay(),
         ],
       ),
     );
@@ -613,7 +627,8 @@ class _ScannerPageState extends State<ScannerPage>
   }
 
   Widget _buildOverlayStack() {
-    if (_isBusy) return const SizedBox.shrink();
+    // Hide everything during standard camera capture/analyzing (full overlay covers it)
+    if (_isBusy && !_isGalleryAction) return const SizedBox.shrink();
 
     final confidencePct = (_detectionConfidence * 100)
         .clamp(0, 100)
@@ -643,7 +658,7 @@ class _ScannerPageState extends State<ScannerPage>
                 border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
               ),
               child: Text(
-                _isStable ? 'Document detected • $confidencePct%' : _liveStatus,
+                _isGalleryAction ? _liveStatus : (_isStable ? 'Document detected • $confidencePct%' : _liveStatus),
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -653,42 +668,44 @@ class _ScannerPageState extends State<ScannerPage>
             ),
           ),
         ),
-        Positioned(
-          bottom: 160,
-          left: 24,
-          right: 24,
-          child: Text(
-            guidance,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 12,
-              color: _scannerPhase == _ScannerPhase.ready
-                  ? AppColors.green
-                  : Colors.white54,
-              fontWeight: _scannerPhase == _ScannerPhase.detecting
-                  ? FontWeight.normal
-                  : FontWeight.w600,
+        if (!_isBusy)
+          Positioned(
+            bottom: 160,
+            left: 24,
+            right: 24,
+            child: Text(
+              guidance,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: _scannerPhase == _ScannerPhase.ready
+                    ? AppColors.green
+                    : Colors.white54,
+                fontWeight: _scannerPhase == _ScannerPhase.detecting
+                    ? FontWeight.normal
+                    : FontWeight.w600,
+              ),
             ),
           ),
-        ),
         if (_batchMode && _activeImages.isNotEmpty)
           Positioned(left: 16, bottom: 120, child: _buildBatchCounter()),
-        // Live analyzing chip removed per request.
-        Positioned.fill(
-          child: IgnorePointer(
-            child: Center(
-              child: FadeTransition(
-                opacity: _focusOpacity,
-                child: ScaleTransition(
-                  scale: _focusScale,
-                  child: Container(
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.5),
-                        width: 1.4,
+        if (!_isBusy)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: FadeTransition(
+                  opacity: _focusOpacity,
+                  child: ScaleTransition(
+                    scale: _focusScale,
+                    child: Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          width: 1.4,
+                        ),
                       ),
                     ),
                   ),
@@ -696,7 +713,6 @@ class _ScannerPageState extends State<ScannerPage>
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -1148,11 +1164,12 @@ class _ScannerPageState extends State<ScannerPage>
     final beforeCount = _activeImages.length;
     setState(() {
       _isCaptureActionPending = true;
+      _isGalleryAction = true;
       _scannerPhase = _ScannerPhase.capturing;
       _isStable = false;
       _stableFrameCount = 0;
       _detectionConfidence = 0;
-      _liveStatus = 'Adding image from gallery...';
+      _liveStatus = 'Adding from gallery...';
     });
 
     await _stopLiveAnalyzer();
@@ -1165,9 +1182,12 @@ class _ScannerPageState extends State<ScannerPage>
         capturedAdded = _activeImages.length > beforeCount;
         setState(() {
           _isCaptureActionPending = false;
+          // We keep _isGalleryAction true until widget.isAnalyzing becomes false
+          // This is handled in didUpdateWidget
           if (widget.isAnalyzing) {
             _scannerPhase = _ScannerPhase.analyzingLocked;
           } else {
+            _isGalleryAction = false;
             _setCooldown();
           }
           _liveStatus = capturedAdded && _batchMode
@@ -1181,26 +1201,31 @@ class _ScannerPageState extends State<ScannerPage>
       widget.onDone();
       return;
     }
-    if (capturedAdded && _batchMode) {
-      _triggerCaptureFeedback(gallery: true);
-    }
+    // _triggerCaptureFeedback() is now handled in didUpdateWidget for gallery
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
   }
 
-  void _triggerCaptureFeedback({bool gallery = false}) {
+  void _triggerCaptureFeedback({bool isGallery = false}) {
     if (!mounted) return;
-    _flashController.forward(from: 0).then((_) {
-      if (mounted) {
-        _flashController.reverse();
-      }
-    });
+    
+    // Only flash for camera capture
+    if (!isGallery) {
+      _flashController.forward(from: 0).then((_) {
+        if (mounted) {
+          _flashController.reverse();
+        }
+      });
+    }
+
     if (_activeImages.isEmpty) return;
     _lastCapturedImage = _activeImages.last;
     _thumbStart = null;
     _thumbEnd = null;
-    if (_batchMode && !gallery) {
+    
+    // Always show flight animation in batch mode
+    if (_batchMode) {
       _thumbController.forward(from: 0);
     }
   }
