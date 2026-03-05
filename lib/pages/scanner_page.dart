@@ -568,7 +568,7 @@ class _ScannerPageState extends State<ScannerPage>
           child: SizedBox(
             width: width,
             height: height,
-            child: _isBusy
+            child: (_isBusy && !_isGalleryAction)
                 ? _buildCameraBlockedPreview()
                 : activeController != null
                 ? CameraPreview(activeController)
@@ -1058,7 +1058,7 @@ class _ScannerPageState extends State<ScannerPage>
               border: Border.all(color: AppColors.green, width: 3),
             ),
             child: Center(
-              child: _isBusy
+              child: (_isBusy && !_isGalleryAction)
                   ? const SizedBox(
                       width: 28,
                       height: 28,
@@ -1161,19 +1161,17 @@ class _ScannerPageState extends State<ScannerPage>
 
   Future<void> _onAddFromGallery() async {
     if (_isBusy) return;
-    final beforeCount = _activeImages.length;
+    
+    // We don't set _isCaptureActionPending or change scannerPhase here
+    // to avoid blurring the camera preview for gallery imports.
     setState(() {
-      _isCaptureActionPending = true;
       _isGalleryAction = true;
-      _scannerPhase = _ScannerPhase.capturing;
-      _isStable = false;
-      _stableFrameCount = 0;
-      _detectionConfidence = 0;
       _liveStatus = 'Adding from gallery...';
     });
 
     await _stopLiveAnalyzer();
 
+    final beforeCount = _activeImages.length;
     var capturedAdded = false;
     try {
       await widget.onAddFromGallery();
@@ -1181,12 +1179,7 @@ class _ScannerPageState extends State<ScannerPage>
       if (mounted) {
         capturedAdded = _activeImages.length > beforeCount;
         setState(() {
-          _isCaptureActionPending = false;
-          // We keep _isGalleryAction true until widget.isAnalyzing becomes false
-          // This is handled in didUpdateWidget
-          if (widget.isAnalyzing) {
-            _scannerPhase = _ScannerPhase.analyzingLocked;
-          } else {
+          if (!widget.isAnalyzing) {
             _isGalleryAction = false;
             _setCooldown();
           }
@@ -1201,7 +1194,7 @@ class _ScannerPageState extends State<ScannerPage>
       widget.onDone();
       return;
     }
-    // _triggerCaptureFeedback() is now handled in didUpdateWidget for gallery
+    // Flight animation handled in didUpdateWidget via _isGalleryAction flag
     if (!widget.isAnalyzing) {
       unawaited(_startLiveAnalyzerIfPossible());
     }
