@@ -199,10 +199,7 @@ class DocumentScannerService {
       var image = img.decodeImage(bytes);
       if (image == null) return null;
 
-      image = _preprocessResize(image, maxHeight);
-      image = _preprocessGrayscale(image);
-      image = _preprocessBlur(image);
-      image = _preprocessNormalize(image);
+      image = preprocessImageForDetection(image, maxHeight: maxHeight);
 
       final outputPath = _buildDerivedPath(imageFile.path, 'preprocessed');
       final outputFile = File(outputPath);
@@ -212,6 +209,17 @@ class DocumentScannerService {
       debugPrint('Error pre-processing image: $e');
       return null;
     }
+  }
+
+  img.Image preprocessImageForDetection(
+    img.Image image, {
+    int maxHeight = 2200,
+  }) {
+    var processed = _preprocessResize(image, maxHeight);
+    processed = _preprocessGrayscale(processed);
+    processed = _preprocessBlur(processed);
+    processed = _preprocessNormalize(processed);
+    return processed;
   }
 
   Future<File?> applyPerspectiveFromCorners(
@@ -226,14 +234,13 @@ class DocumentScannerService {
       final decoded = img.decodeImage(bytes);
       if (decoded == null) return imageFile;
 
-      final ordered = _orderPerspectiveCorners(
+      final warped = applyPerspectiveToImage(
+        decoded,
         corners,
-        decoded.width,
-        decoded.height,
         useDefaultOnInvalid: useDefaultOnInvalid,
       );
-      if (ordered == null) return imageFile;
-      final warped = _applyPerspectiveCorrection(decoded, ordered);
+      if (warped == null) return imageFile;
+
       final outputPath = _buildDerivedPath(imageFile.path, suffix);
       final outputFile = File(outputPath);
       await outputFile.writeAsBytes(img.encodeJpg(warped, quality: 95));
@@ -242,6 +249,23 @@ class DocumentScannerService {
       debugPrint('Error applying perspective: $e');
       return imageFile;
     }
+  }
+
+  img.Image? applyPerspectiveToImage(
+    img.Image image,
+    List<ScanPoint> corners, {
+    bool useDefaultOnInvalid = true,
+  }) {
+    if (corners.length != 4) return null;
+
+    final ordered = _orderPerspectiveCorners(
+      corners,
+      image.width,
+      image.height,
+      useDefaultOnInvalid: useDefaultOnInvalid,
+    );
+    if (ordered == null) return null;
+    return _applyPerspectiveCorrection(image, ordered);
   }
 
   Future<File?> postProcessWarpedDocument(
