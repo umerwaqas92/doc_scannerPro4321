@@ -7,8 +7,6 @@ class HomePage extends StatefulWidget {
   final VoidCallback onScanTap;
   final ValueChanged<ScannedDocument> onDocTap;
   final VoidCallback onSeeAllTap;
-  final ValueChanged<String> onSearchChanged;
-  final String searchQuery;
   final VoidCallback onPdfToolTap;
   final VoidCallback onOcrToolTap;
   final VoidCallback onShareToolTap;
@@ -20,8 +18,6 @@ class HomePage extends StatefulWidget {
     required this.onScanTap,
     required this.onDocTap,
     required this.onSeeAllTap,
-    required this.onSearchChanged,
-    required this.searchQuery,
     required this.onPdfToolTap,
     required this.onOcrToolTap,
     required this.onShareToolTap,
@@ -33,38 +29,9 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  late final TextEditingController _searchController;
-  late final FocusNode _searchFocusNode;
-  bool _searchOpen = false;
-
   @override
   void initState() {
     super.initState();
-    _searchController = TextEditingController(text: widget.searchQuery);
-    _searchFocusNode = FocusNode();
-    _searchOpen = widget.searchQuery.trim().isNotEmpty;
-  }
-
-  @override
-  void didUpdateWidget(covariant HomePage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.searchQuery != widget.searchQuery &&
-        _searchController.text != widget.searchQuery) {
-      _searchController.value = TextEditingValue(
-        text: widget.searchQuery,
-        selection: TextSelection.collapsed(offset: widget.searchQuery.length),
-      );
-    }
-    if (widget.searchQuery.trim().isNotEmpty && !_searchOpen) {
-      _searchOpen = true;
-    }
-  }
-
-  @override
-  void dispose() {
-    _searchFocusNode.dispose();
-    _searchController.dispose();
-    super.dispose();
   }
 
   @override
@@ -91,123 +58,16 @@ class _HomePageState extends State<HomePage> {
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 10, 24, 16),
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        transitionBuilder: (child, animation) => FadeTransition(
-          opacity: animation,
-          child: SizeTransition(
-            sizeFactor: animation,
-            axisAlignment: -1,
-            child: child,
-          ),
+      child: const Text(
+        'DocScan',
+        style: TextStyle(
+          fontSize: 26,
+          fontWeight: FontWeight.w600,
+          color: AppColors.text,
+          letterSpacing: -0.5,
         ),
-        child: _searchOpen
-            ? Row(
-                key: const ValueKey('search_open'),
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      onChanged: (value) {
-                        widget.onSearchChanged(value);
-                        setState(() {});
-                      },
-                      textInputAction: TextInputAction.search,
-                      decoration: InputDecoration(
-                        hintText: 'Search documents',
-                        prefixIcon: const Icon(
-                          Icons.search,
-                          color: AppColors.text2,
-                        ),
-                        suffixIcon: _searchController.text.isEmpty
-                            ? null
-                            : IconButton(
-                                onPressed: () {
-                                  _searchController.clear();
-                                  widget.onSearchChanged('');
-                                  setState(() {});
-                                },
-                                icon: const Icon(
-                                  Icons.close,
-                                  color: AppColors.text2,
-                                ),
-                              ),
-                        filled: true,
-                        fillColor: AppColors.surface,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: AppColors.border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: AppColors.text2),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          vertical: 12,
-                          horizontal: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: _closeSearch,
-                    icon: const Icon(Icons.close, color: AppColors.text2),
-                  ),
-                ],
-              )
-            : Row(
-                key: const ValueKey('search_closed'),
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'DocScan',
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.text,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: _openSearch,
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        border: Border.all(color: AppColors.border),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.search,
-                        size: 20,
-                        color: AppColors.text,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
       ),
     );
-  }
-
-  void _openSearch() {
-    setState(() => _searchOpen = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _searchFocusNode.requestFocus();
-    });
-  }
-
-  void _closeSearch() {
-    _searchFocusNode.unfocus();
-    _searchController.clear();
-    widget.onSearchChanged('');
-    setState(() => _searchOpen = false);
   }
 
   Widget _buildScanBanner() {
@@ -370,7 +230,6 @@ class _HomePageState extends State<HomePage> {
 
   Widget _buildDocList() {
     if (widget.documents.isEmpty) {
-      final isSearching = widget.searchQuery.trim().isNotEmpty;
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Container(
@@ -389,14 +248,12 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 12),
               Text(
-                isSearching ? 'No matching documents' : 'No documents yet',
+                'No documents yet',
                 style: const TextStyle(fontSize: 14, color: AppColors.text2),
               ),
               const SizedBox(height: 4),
               Text(
-                isSearching
-                    ? 'Try another search keyword'
-                    : 'Tap the scan button to get started',
+                'Tap the scan button to get started',
                 style: const TextStyle(fontSize: 12, color: AppColors.text3),
               ),
             ],

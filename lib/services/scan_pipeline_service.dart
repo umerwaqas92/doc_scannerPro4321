@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import '../models/scan_pipeline_models.dart';
 import 'document_scanner_service.dart';
@@ -159,6 +160,159 @@ class ScanPipelineService {
         perspectiveApplied: perspectiveApplied,
         stageStatus: stageStatus,
       );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<ScanPipelineResult?> runInBackground(
+    File input, {
+    ScanPipelineOptions options = const ScanPipelineOptions(),
+    void Function(ScanStage stage, String message)? onStage,
+  }) async {
+    onStage?.call(ScanStage.preprocess, 'Processing image');
+    final result = await compute(
+      _runScanPipelineWorker,
+      <String, dynamic>{
+        'path': input.path,
+        'maxDimension': options.maxDimension,
+        'minConfidence': options.minConfidence,
+      },
+    );
+    if (result == null) return null;
+
+    final variants = <DocumentFilterMode, File>{};
+    final rawVariants = result['enhancedVariants'] as Map<String, dynamic>;
+    rawVariants.forEach((key, value) {
+      final mode = DocumentFilterMode.values.firstWhere(
+        (m) => m.name == key,
+        orElse: () => DocumentFilterMode.original,
+      );
+      variants[mode] = File(value as String);
+    });
+
+    final corners = _decodeCorners(result['corners'] as List<dynamic>);
+    final ordered = _decodeCorners(
+      result['orderedCorners'] as List<dynamic>,
+    );
+
+    final stageStatus = <ScanStage, StageState>{
+      ScanStage.capture: const StageState(
+        completed: true,
+        message: 'Image captured',
+      ),
+      ScanStage.preprocess: const StageState(
+        completed: true,
+        message: 'Pre-processing complete',
+      ),
+      ScanStage.detectEdges: const StageState(
+        completed: true,
+        message: 'Edges detected',
+      ),
+      ScanStage.perspectiveCorrection: const StageState(
+        completed: true,
+        message: 'Perspective correction complete',
+      ),
+      ScanStage.crop: const StageState(
+        completed: true,
+        message: 'Auto-crop complete',
+      ),
+      ScanStage.enhance: const StageState(
+        completed: true,
+        message: 'Enhancement complete',
+      ),
+    };
+
+    onStage?.call(ScanStage.enhance, 'Enhancement complete');
+
+    return ScanPipelineResult(
+      originalFile: File(result['originalPath'] as String),
+      preprocessedFile: File(result['preprocessedPath'] as String),
+      perspectiveFile: File(result['perspectivePath'] as String),
+      croppedFile: File(result['croppedPath'] as String),
+      enhancedVariants: variants,
+      corners: corners,
+      orderedCorners: ordered,
+      detectionConfidence: result['detectionConfidence'] as double,
+      perspectiveConfidence: result['perspectiveConfidence'] as double,
+      usedFallback: result['usedFallback'] as bool,
+      perspectiveApplied: result['perspectiveApplied'] as bool,
+      stageStatus: stageStatus,
+    );
+  }
+
+  Future<Map<String, dynamic>?> runSerialized(
+    File input, {
+    ScanPipelineOptions options = const ScanPipelineOptions(),
+  }) async {
+    File normalizedInput = input;
+    File preprocessed = input;
+    File perspective = input;
+    File cropped = input;
+    DetectedDocument? detected;
+    bool perspectiveApplied = false;
+    double perspectiveConfidence = 0.0;
+    List<ScanCorner> orderedCorners = const <ScanCorner>[];
+
+    try {
+      normalizedInput = await _normalizeOrientation(input);
+      preprocessed =
+          await _scannerService.preprocessForDetection(
+            normalizedInput,
+            maxHeight: options.maxDimension,
+          ) ??
+          normalizedInput;
+
+      detected = await _analyzer.detectDocument(
+        normalizedInput,
+        minConfidence: options.minConfidence,
+      );
+      perspectiveConfidence = detected.confidence;
+      orderedCorners = List<ScanCorner>.from(detected.corners, growable: false);
+
+      if (_isReliablePerspectiveCandidate(detected, options.minConfidence)) {
+        final points = detected.corners
+            .map((c) => ScanPoint(c.x, c.y))
+            .toList(growable: false);
+        perspective =
+            await _scannerService.applyPerspectiveFromCorners(
+              normalizedInput,
+              points,
+              suffix: 'warped',
+              useDefaultOnInvalid: false,
+            ) ??
+            normalizedInput;
+        perspectiveApplied = perspective.path != normalizedInput.path;
+      } else {
+        perspective = normalizedInput;
+      }
+
+      if (perspectiveApplied) {
+        cropped = await _postProcessPerspective(perspective);
+      } else {
+        cropped = await _autoCropDocument(normalizedInput);
+      }
+
+      final variants = await _buildEnhancementVariants(cropped);
+
+      final serializedVariants = <String, String>{};
+      variants.forEach((key, value) {
+        serializedVariants[key.name] = value.path;
+      });
+
+      return <String, dynamic>{
+        'originalPath': normalizedInput.path,
+        'preprocessedPath': preprocessed.path,
+        'perspectivePath': perspective.path,
+        'croppedPath': cropped.path,
+        'enhancedVariants': serializedVariants,
+        'corners': _encodeCorners(detected.corners),
+        'orderedCorners': _encodeCorners(orderedCorners),
+        'detectionConfidence': detected.confidence,
+        'perspectiveConfidence': perspectiveConfidence,
+        'usedFallback': detected.isFallback,
+        'perspectiveApplied': perspectiveApplied,
+      };
     } catch (_) {
       return null;
     }
@@ -481,4 +635,38 @@ class ScanPipelineService {
     if (dot == -1) return '${originalPath}_$suffix.jpg';
     return '${originalPath.substring(0, dot)}_$suffix${originalPath.substring(dot)}';
   }
+}
+
+Future<Map<String, dynamic>?> _runScanPipelineWorker(
+  Map<String, dynamic> args,
+) async {
+  final path = args['path'] as String;
+  final maxDimension = args['maxDimension'] as int;
+  final minConfidence = args['minConfidence'] as double;
+  final service = ScanPipelineService();
+  return service.runSerialized(
+    File(path),
+    options: ScanPipelineOptions(
+      maxDimension: maxDimension,
+      minConfidence: minConfidence,
+    ),
+  );
+}
+
+List<Map<String, double>> _encodeCorners(List<ScanCorner> corners) {
+  return corners
+      .map((c) => <String, double>{'x': c.x, 'y': c.y})
+      .toList(growable: false);
+}
+
+List<ScanCorner> _decodeCorners(List<dynamic> corners) {
+  return corners
+      .map((c) {
+        final map = c as Map<String, dynamic>;
+        return ScanCorner(
+          (map['x'] as num).toDouble(),
+          (map['y'] as num).toDouble(),
+        );
+      })
+      .toList(growable: false);
 }

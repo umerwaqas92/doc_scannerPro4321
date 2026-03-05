@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
 import '../models/scanned_document.dart';
 import '../models/scan_pipeline_models.dart';
 import '../services/storage_service.dart';
@@ -88,6 +89,9 @@ class AppState extends ChangeNotifier {
 
   Future<bool> initializeCamera() async {
     _cameraInitialized = await _cameraService.initializeCamera();
+    if (_cameraInitialized) {
+      await _cameraService.setFlashMode(_mapFlashMode(_flashMode));
+    }
     notifyListeners();
     return _cameraInitialized;
   }
@@ -122,7 +126,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await _scanPipelineService.run(
+      final result = await _scanPipelineService.runInBackground(
         image,
         options: const ScanPipelineOptions(
           maxDimension: 1300,
@@ -613,6 +617,7 @@ class AppState extends ChangeNotifier {
   Future<void> setFlashMode(String value) async {
     _flashMode = value;
     await _settingsService.setFlashMode(value);
+    await _cameraService.setFlashMode(_mapFlashMode(value));
     notifyListeners();
   }
 
@@ -633,6 +638,17 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _cameraService.dispose();
     notifyListeners();
+  }
+
+  FlashMode _mapFlashMode(String value) {
+    switch (value.trim().toLowerCase()) {
+      case 'on':
+        return FlashMode.always;
+      case 'off':
+        return FlashMode.off;
+      default:
+        return FlashMode.auto;
+    }
   }
 
   @override

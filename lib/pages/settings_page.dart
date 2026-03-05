@@ -3,17 +3,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../theme/app_theme.dart';
 
 class SettingsPage extends StatelessWidget {
-  final bool autoCrop;
-  final String flashMode;
-  final Function(bool) onAutoCropChanged;
-  final Function(String) onFlashModeChanged;
-
   const SettingsPage({
     super.key,
-    required this.autoCrop,
-    required this.flashMode,
-    required this.onAutoCropChanged,
-    required this.onFlashModeChanged,
   });
 
   Future<void> _launchURL(String urlString) async {
@@ -33,14 +24,11 @@ class SettingsPage extends StatelessWidget {
           children: [
             _buildHeader(),
             _buildSection('Scan', [
-              _buildToggleRow(
+              _buildValueRow(
                 Icons.document_scanner_outlined,
-                'Auto Crop',
-                'Detect edges automatically',
-                autoCrop,
-                onAutoCropChanged,
+                'Smart Scan',
+                'Automatic edge detection',
               ),
-              _buildValueRow(Icons.wb_sunny_outlined, 'Flash Mode', flashMode),
             ]),
             _buildSection('Account', [
               _buildNavRow(
@@ -188,7 +176,7 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  Widget _buildValueRow(IconData icon, String label, String value) {
+  Widget _buildValueRow(IconData icon, String label, String sub) {
     return Padding(
       padding: const EdgeInsets.all(14),
       child: Row(
@@ -204,24 +192,23 @@ class SettingsPage extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.text,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.text,
+                  ),
+                ),
+                Text(
+                  sub,
+                  style: const TextStyle(fontSize: 12, color: AppColors.text3),
+                ),
+              ],
             ),
-          ),
-          Row(
-            children: [
-              Text(
-                value,
-                style: const TextStyle(fontSize: 13, color: AppColors.text2),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.chevron_right, size: 16, color: AppColors.text3),
-            ],
           ),
         ],
       ),

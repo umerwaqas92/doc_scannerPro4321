@@ -60,7 +60,6 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final ExportService _exportService = ExportService();
   int _currentIndex = 0;
-  String _homeSearchQuery = '';
   bool _showScanner = false;
   bool _showEdit = false;
   bool _showResult = false;
@@ -535,18 +534,6 @@ class _MainScreenState extends State<MainScreen> {
     setState(() => _currentIndex = 0);
   }
 
-  void _onHomeSearchChanged(String value) {
-    setState(() => _homeSearchQuery = value);
-  }
-
-  List<ScannedDocument> _filteredHomeDocuments(AppState appState) {
-    final query = _homeSearchQuery.trim().toLowerCase();
-    if (query.isEmpty) return appState.documents;
-    return appState.documents
-        .where((doc) => doc.name.toLowerCase().contains(query))
-        .toList(growable: false);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Consumer<AppState>(
@@ -593,6 +580,8 @@ class _MainScreenState extends State<MainScreen> {
         analysisStageText: appState.analysisStageText,
         capturedImages: appState.capturedImages,
         batchImages: appState.batchRawImages,
+        flashMode: appState.flashMode,
+        onFlashModeChanged: (value) => appState.setFlashMode(value),
         onCancel: _onScannerCancel,
         onDone: _onScannerDone,
         onCapture: _onScannerCapture,
@@ -638,12 +627,10 @@ class _MainScreenState extends State<MainScreen> {
     switch (_currentIndex) {
       case 0:
         return HomePage(
-          documents: _filteredHomeDocuments(appState),
+          documents: appState.documents,
           onScanTap: _onScanTap,
           onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          searchQuery: _homeSearchQuery,
-          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,
@@ -686,24 +673,17 @@ class _MainScreenState extends State<MainScreen> {
         );
       case 3:
         return HomePage(
-          documents: _filteredHomeDocuments(appState),
+          documents: appState.documents,
           onScanTap: _onScanTap,
           onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          searchQuery: _homeSearchQuery,
-          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,
           onCompressToolTap: _openCompressorTool,
         );
       case 4:
-        return SettingsPage(
-          autoCrop: appState.autoCrop,
-          flashMode: appState.flashMode,
-          onAutoCropChanged: (value) => appState.setAutoCrop(value),
-          onFlashModeChanged: (value) => appState.setFlashMode(value),
-        );
+        return const SettingsPage();
       case 5:
         final selected = appState.selectedDocument;
         if (selected != null && selected.isPdf) {
@@ -730,12 +710,10 @@ class _MainScreenState extends State<MainScreen> {
         );
       default:
         return HomePage(
-          documents: _filteredHomeDocuments(appState),
+          documents: appState.documents,
           onScanTap: _onScanTap,
           onDocTap: _onDocTap,
           onSeeAllTap: _onSeeAllTap,
-          searchQuery: _homeSearchQuery,
-          onSearchChanged: _onHomeSearchChanged,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
           onShareToolTap: _openShareTool,

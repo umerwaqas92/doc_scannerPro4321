@@ -66,6 +66,62 @@ class _ImageEditPageState extends State<ImageEditPage> {
   }
 
   @override
+  void didUpdateWidget(covariant ImageEditPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.pipelineResults.length != oldWidget.pipelineResults.length) {
+      // keep indices aligned if lists expand
+      final newLength = widget.images.length;
+      if (_previewImages.length != newLength) {
+        _previewImages = List<File>.from(widget.images);
+        _renderedOutputs = List<File?>.filled(newLength, null);
+        _manualPerspectiveBases = List<File?>.filled(newLength, null);
+        _sessions = List<EditSessionState>.generate(newLength, (index) {
+          final pipeline = index < widget.pipelineResults.length
+              ? widget.pipelineResults[index]
+              : null;
+          final filter =
+              pipeline?.selectedFilter ?? DocumentFilterMode.colorEnhanced;
+          final output = pipeline?.selectedOutputFile ?? widget.images[index];
+          _previewImages[index] = output;
+          return EditSessionState(
+            pageIndex: index,
+            filterMode: filter,
+            outputFile: output,
+          );
+        });
+        _renderedOutputs = List<File?>.from(_previewImages);
+        _previewTokens = List<int>.filled(newLength, 0);
+        _renderInFlightCounts = List<int>.filled(newLength, 0);
+        _lastPreviewSignatures = List<String?>.filled(newLength, null);
+        return;
+      }
+    }
+
+    var updated = false;
+    for (var i = 0; i < widget.pipelineResults.length; i++) {
+      final pipeline = widget.pipelineResults[i];
+      final oldPipeline =
+          i < oldWidget.pipelineResults.length ? oldWidget.pipelineResults[i] : null;
+      if (pipeline == null || pipeline == oldPipeline) continue;
+      if (_dirtyPages.contains(i)) continue;
+
+      final output = pipeline.selectedOutputFile;
+      _previewImages[i] = output;
+      _renderedOutputs[i] = output;
+      _sessions[i] = _sessions[i].copyWith(
+        filterMode: pipeline.selectedFilter,
+        outputFile: output,
+      );
+      _lastPreviewSignatures[i] = null;
+      updated = true;
+    }
+
+    if (updated && mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
   void dispose() {
     _previewDebounce?.cancel();
     super.dispose();
