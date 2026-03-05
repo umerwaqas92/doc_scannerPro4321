@@ -3,15 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import '../models/scanned_document.dart';
 import '../models/scan_pipeline_models.dart';
-import '../services/storage_service.dart';
-import '../services/camera_service.dart';
-import '../services/image_picker_service.dart';
-import '../services/pdf_service.dart';
-import '../services/settings_service.dart';
-import '../services/ocr_service.dart';
-import '../services/scan_pipeline_service.dart';
-import '../services/export_optimization_service.dart';
-import '../services/export_service.dart';
+import 'storage_service.dart';
+import 'camera_service.dart';
+import 'image_picker_service.dart';
+import 'pdf_service.dart';
+import 'settings_service.dart';
+import 'ocr_service.dart';
+import 'scan_pipeline_service.dart';
+import 'export_optimization_service.dart';
+import 'export_service.dart';
 import 'package:image/image.dart' as img;
 
 class AppState extends ChangeNotifier {
@@ -124,6 +124,8 @@ class AppState extends ChangeNotifier {
     _activeAnalysisCount++;
     _analysisStageText = 'Analyzing document...';
     notifyListeners();
+    
+    debugPrint('Running pipeline for ${image.path}');
 
     try {
       final result = await _scanPipelineService.runInBackground(
@@ -379,8 +381,13 @@ class AppState extends ChangeNotifier {
     _isProcessingOcr = true;
     notifyListeners();
 
-    _ocrResults.clear();
+    // Initialize with placeholders to avoid index out of bounds during partial updates
+    _ocrResults = List.generate(
+      _capturedImages.length,
+      (_) => OcrResult(success: false, text: '', confidence: 0),
+    );
     _editedOcrTexts.clear();
+    notifyListeners();
 
     for (var i = 0; i < _capturedImages.length; i++) {
       final variants = <File>[];
@@ -401,7 +408,10 @@ class AppState extends ChangeNotifier {
       }
 
       final result = await _ocrService.processImageWithVariants(deduped);
-      _ocrResults.add(result);
+      if (i < _ocrResults.length) {
+        _ocrResults[i] = result;
+        notifyListeners(); // Notify after each page for better responsiveness
+      }
     }
 
     _isProcessingOcr = false;
