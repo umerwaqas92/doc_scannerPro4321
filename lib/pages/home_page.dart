@@ -9,6 +9,7 @@ class HomePage extends StatefulWidget {
   final VoidCallback onSeeAllTap;
   final VoidCallback onPdfToolTap;
   final VoidCallback onOcrToolTap;
+  final VoidCallback onClearScanToolTap;
   final VoidCallback onShareToolTap;
   final VoidCallback onCompressToolTap;
 
@@ -20,6 +21,7 @@ class HomePage extends StatefulWidget {
     required this.onSeeAllTap,
     required this.onPdfToolTap,
     required this.onOcrToolTap,
+    required this.onClearScanToolTap,
     required this.onShareToolTap,
     required this.onCompressToolTap,
   });
@@ -44,6 +46,7 @@ class _HomePageState extends State<HomePage> {
           children: [
             _buildHeader(),
             _buildScanBanner(),
+            _buildClearScanBanner(),
             _buildSectionLabel('Tools'),
             _buildQuickActions(),
             _buildRecentHeader(),
@@ -134,6 +137,38 @@ class _HomePageState extends State<HomePage> {
           fontWeight: FontWeight.w500,
           color: AppColors.text2,
           letterSpacing: 0.04,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildClearScanBanner() {
+    return GestureDetector(
+      onTap: widget.onClearScanToolTap,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppDimens.radiusSm),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: const Row(
+          children: [
+            Icon(Icons.auto_fix_high, color: AppColors.text),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Clear Scan: import image/PDF and extract cleaner text',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.text2,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, size: 14, color: AppColors.text3),
+          ],
         ),
       ),
     );
@@ -343,9 +378,10 @@ class _HomePageState extends State<HomePage> {
                 color: document.isPdf ? AppColors.pdfRed : AppColors.jpgBlue,
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
-                  color: document.isPdf
-                      ? const Color(0xFFF5C0BB)
-                      : const Color(0xFFB9D8F0),
+                  color:
+                      document.isPdf
+                          ? const Color(0xFFF5C0BB)
+                          : const Color(0xFFB9D8F0),
                 ),
               ),
               child: Text(
@@ -353,9 +389,10 @@ class _HomePageState extends State<HomePage> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
-                  color: document.isPdf
-                      ? AppColors.pdfRedText
-                      : AppColors.jpgBlueText,
+                  color:
+                      document.isPdf
+                          ? AppColors.pdfRedText
+                          : AppColors.jpgBlueText,
                   fontFamily: 'monospace',
                 ),
               ),

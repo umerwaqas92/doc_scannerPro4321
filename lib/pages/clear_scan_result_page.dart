@@ -6,21 +6,19 @@ import '../services/ocr_service.dart';
 import '../services/ocr_tool_service.dart';
 import '../theme/app_theme.dart';
 
-class OcrToolResultPage extends StatefulWidget {
+class ClearScanResultPage extends StatefulWidget {
   final OcrToolPageResult result;
-  final VoidCallback? onBackToHome;
 
-  const OcrToolResultPage({super.key, required this.result, this.onBackToHome});
+  const ClearScanResultPage({super.key, required this.result});
 
   @override
-  State<OcrToolResultPage> createState() => _OcrToolResultPageState();
+  State<ClearScanResultPage> createState() => _ClearScanResultPageState();
 }
 
-class _OcrToolResultPageState extends State<OcrToolResultPage> {
+class _ClearScanResultPageState extends State<ClearScanResultPage> {
   int _currentPage = 0;
-  int _contentTab = 0; // 0 = clear view, 1 = text
+  int _tab = 0; // 0 = clear view, 1 = text
   bool _editMode = false;
-  bool _cardVisible = false;
   late List<TextEditingController> _controllers;
 
   @override
@@ -34,13 +32,8 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
         .map((text) => TextEditingController(text: text))
         .toList(growable: false);
     if (widget.result.clearPages.isEmpty) {
-      _contentTab = 1;
+      _tab = 1;
     }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => _cardVisible = true);
-    });
   }
 
   @override
@@ -58,13 +51,13 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     final maxPages =
         totalPages > totalClearPages ? totalPages : totalClearPages;
     final safePage = maxPages == 0 ? 0 : _currentPage.clamp(0, maxPages - 1);
-    final currentController =
+    final hasClearView = totalClearPages > 0;
+    final showClearView = hasClearView && _tab == 0;
+    final textController =
         totalPages == 0
             ? null
             : _controllers[safePage.clamp(0, totalPages - 1)];
-    final hasClearView = totalClearPages > 0;
-    final showClearView = hasClearView && _contentTab == 0;
-    final clearPageFile =
+    final clearFile =
         hasClearView
             ? widget.result.clearPages[safePage.clamp(0, totalClearPages - 1)]
             : null;
@@ -73,11 +66,7 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.bg,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _goHome,
-        ),
-        title: const Text('OCR Result'),
+        title: const Text('Clear Scan Result'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -132,32 +121,33 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
                         label: Text('Text'),
                       ),
                     ],
-                    selected: {_contentTab},
+                    selected: {_tab},
                     onSelectionChanged: (selection) {
                       if (selection.isEmpty) return;
-                      setState(() => _contentTab = selection.first);
+                      setState(() => _tab = selection.first);
                     },
-                  ),
-                if (!showClearView)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment<bool>(value: false, label: Text('Read')),
-                        ButtonSegment<bool>(value: true, label: Text('Edit')),
-                      ],
-                      selected: {_editMode},
-                      onSelectionChanged: (selection) {
-                        if (selection.isEmpty) return;
-                        setState(() => _editMode = selection.first);
-                      },
-                    ),
                   ),
               ],
             ),
             const SizedBox(height: 8),
+            if (!showClearView)
+              Align(
+                alignment: Alignment.centerRight,
+                child: SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(value: false, label: Text('Read')),
+                    ButtonSegment<bool>(value: true, label: Text('Edit')),
+                  ],
+                  selected: {_editMode},
+                  onSelectionChanged: (selection) {
+                    if (selection.isEmpty) return;
+                    setState(() => _editMode = selection.first);
+                  },
+                ),
+              ),
+            const SizedBox(height: 8),
             Text(
-              showClearView ? 'Cleared Page Preview' : 'Extracted Text',
+              showClearView ? 'Clear Scan Output' : 'Readable Text Output',
               style: const TextStyle(
                 color: AppColors.text2,
                 fontWeight: FontWeight.w600,
@@ -165,61 +155,18 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: AnimatedOpacity(
-                opacity: _cardVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 280),
-                curve: Curves.easeOut,
-                child: AnimatedSlide(
-                  offset: _cardVisible ? Offset.zero : const Offset(0, 0.03),
-                  duration: const Duration(milliseconds: 280),
-                  curve: Curves.easeOutCubic,
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child:
-                        showClearView
-                            ? _buildClearViewCard(clearPageFile)
-                            : totalPages == 0
-                            ? const Center(
-                              child: Text(
-                                'No text found',
-                                style: TextStyle(color: AppColors.text2),
-                              ),
-                            )
-                            : _editMode
-                            ? TextField(
-                              controller: currentController,
-                              maxLines: null,
-                              expands: true,
-                              textAlignVertical: TextAlignVertical.top,
-                              style: const TextStyle(
-                                fontSize: 15,
-                                height: 1.7,
-                                color: AppColors.text,
-                              ),
-                              decoration: const InputDecoration(
-                                border: InputBorder.none,
-                                hintText: 'No text detected',
-                              ),
-                            )
-                            : SingleChildScrollView(
-                              child: SelectableText(
-                                currentController?.text ?? '',
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  height: 1.75,
-                                  color: AppColors.text,
-                                ),
-                                textAlign: TextAlign.left,
-                              ),
-                            ),
-                  ),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.border),
                 ),
+                child:
+                    showClearView
+                        ? _buildClearViewCard(clearFile)
+                        : _buildTextCard(textController, totalPages),
               ),
             ),
             const SizedBox(height: 12),
@@ -262,11 +209,11 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     );
   }
 
-  Widget _buildClearViewCard(File? clearPageFile) {
-    if (clearPageFile == null) {
+  Widget _buildClearViewCard(File? clearFile) {
+    if (clearFile == null) {
       return const Center(
         child: Text(
-          'No clear preview available',
+          'No clear scan image available',
           style: TextStyle(color: AppColors.text2),
         ),
       );
@@ -277,16 +224,51 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
         minScale: 1.0,
         maxScale: 5.0,
         child: Image.file(
-          clearPageFile,
+          clearFile,
           fit: BoxFit.contain,
           errorBuilder: (context, error, stackTrace) {
             return const Center(
               child: Text(
-                'Failed to load clear preview',
+                'Failed to load clear scan image',
                 style: TextStyle(color: AppColors.text2),
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTextCard(TextEditingController? controller, int totalPages) {
+    if (totalPages == 0 || controller == null) {
+      return const Center(
+        child: Text('No text found', style: TextStyle(color: AppColors.text2)),
+      );
+    }
+    if (_editMode) {
+      return TextField(
+        controller: controller,
+        maxLines: null,
+        expands: true,
+        textAlignVertical: TextAlignVertical.top,
+        style: const TextStyle(
+          fontSize: 15,
+          height: 1.7,
+          color: AppColors.text,
+        ),
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          hintText: 'No text detected',
+        ),
+      );
+    }
+    return SingleChildScrollView(
+      child: SelectableText(
+        controller.text,
+        style: const TextStyle(
+          fontSize: 16,
+          height: 1.75,
+          color: AppColors.text,
         ),
       ),
     );
@@ -304,7 +286,6 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
       if (lines.isEmpty) continue;
       blockTexts.add(lines.join('\n'));
     }
-
     if (blockTexts.isNotEmpty) {
       return blockTexts.join('\n\n');
     }
@@ -417,26 +398,17 @@ class _OcrToolResultPageState extends State<OcrToolResultPage> {
     final all = _allText();
     if (all.trim().isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No extracted text to share')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('No text to share')));
       return;
     }
-    await Share.share(all, subject: 'OCR Text from DocScan');
+    await Share.share(all, subject: 'Clear Scan Text');
   }
 
   void _flushParagraph(List<String> paragraphs, StringBuffer buffer) {
     if (buffer.isEmpty) return;
     paragraphs.add(buffer.toString().trim());
     buffer.clear();
-  }
-
-  void _goHome() {
-    if (widget.onBackToHome != null) {
-      Navigator.of(context).pop();
-      widget.onBackToHome!.call();
-      return;
-    }
-    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 }

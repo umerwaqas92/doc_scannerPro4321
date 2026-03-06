@@ -1,93 +1,54 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../models/scan_pipeline_models.dart';
-import '../services/ocr_service.dart';
 import '../theme/app_theme.dart';
 
 class ScanResultPage extends StatefulWidget {
   final List<File> scannedImages;
-  final List<OcrResult> ocrResults;
-  final bool isProcessingOcr;
   final VoidCallback onRetry;
   final VoidCallback onSave;
   final VoidCallback onBack;
   final Function(int) onRemoveImage;
   final VoidCallback onAddMore;
-  final VoidCallback onProcessOcr;
-  final void Function(int pageIndex, String text) onTextChanged;
+  final VoidCallback onClearScanTap;
 
   const ScanResultPage({
     super.key,
     required this.scannedImages,
-    required this.ocrResults,
-    required this.isProcessingOcr,
     required this.onRetry,
     required this.onSave,
     required this.onBack,
     required this.onRemoveImage,
     required this.onAddMore,
-    required this.onProcessOcr,
-    required this.onTextChanged,
+    required this.onClearScanTap,
   });
 
   @override
   State<ScanResultPage> createState() => _ScanResultPageState();
 }
 
-class _ScanResultPageState extends State<ScanResultPage>
-    with SingleTickerProviderStateMixin {
+class _ScanResultPageState extends State<ScanResultPage> {
   int _currentPage = 0;
-  int _selectedTab = 0;
   final PageController _pageController = PageController();
-  final TextEditingController _textController = TextEditingController();
-  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(() {
-      setState(() {
-        _selectedTab = _tabController.index;
-      });
-    });
-    _updateTextController();
   }
 
   @override
   void didUpdateWidget(covariant ScanResultPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_currentPage >= widget.scannedImages.length) {
-      _currentPage = widget.scannedImages.isEmpty
-          ? 0
-          : widget.scannedImages.length - 1;
-    }
-    if (oldWidget.ocrResults != widget.ocrResults ||
-        oldWidget.scannedImages != widget.scannedImages) {
-      _updateTextController();
+      _currentPage =
+          widget.scannedImages.isEmpty ? 0 : widget.scannedImages.length - 1;
     }
   }
 
   @override
   void dispose() {
     _pageController.dispose();
-    _tabController.dispose();
-    _textController.dispose();
     super.dispose();
-  }
-
-  void _updateTextController() {
-    final text = (_currentPage < widget.ocrResults.length)
-        ? widget.ocrResults[_currentPage].text
-        : '';
-    if (_textController.text != text) {
-      _textController.value = _textController.value.copyWith(
-        text: text,
-        selection: TextSelection.collapsed(offset: text.length),
-        composing: TextRange.empty,
-      );
-    }
   }
 
   @override
@@ -98,9 +59,8 @@ class _ScanResultPageState extends State<ScanResultPage>
         child: Column(
           children: [
             _buildHeader(),
-            _buildTabBar(),
             Expanded(
-              child: _selectedTab == 0 ? _buildImageView() : _buildTextView(),
+              child: _buildImageView(),
             ),
             _buildBottomActions(),
           ],
@@ -148,31 +108,6 @@ class _ScanResultPageState extends State<ScanResultPage>
     );
   }
 
-  Widget _buildTabBar() {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 20),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: TabBar(
-        controller: _tabController,
-        labelColor: Colors.white,
-        unselectedLabelColor: AppColors.text2,
-        indicatorSize: TabBarIndicatorSize.tab,
-        indicator: BoxDecoration(
-          color: AppColors.text,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        tabs: const [
-          Tab(text: 'Image'),
-          Tab(text: 'Text (OCR)'),
-        ],
-      ),
-    );
-  }
-
   Widget _buildImageView() {
     if (widget.scannedImages.isEmpty) {
       return _buildEmptyState();
@@ -187,7 +122,6 @@ class _ScanResultPageState extends State<ScanResultPage>
             onPageChanged: (index) {
               setState(() {
                 _currentPage = index;
-                _updateTextController();
               });
             },
             itemBuilder: (context, index) {
@@ -196,194 +130,31 @@ class _ScanResultPageState extends State<ScanResultPage>
           ),
         ),
         _buildPageIndicator(),
-        _buildQualityInfo(),
+        _buildEnhancementLabel(),
       ],
     );
   }
 
-  Widget _buildTextView() {
-    return Column(
-      children: [
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: widget.isProcessingOcr
-                  ? _buildProcessingState()
-                  : _buildTextEditor(),
-            ),
-          ),
-        ),
-        if (widget.scannedImages.isNotEmpty) _buildOcrButton(),
-      ],
-    );
-  }
-
-  Widget _buildProcessingState() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          CircularProgressIndicator(color: AppColors.text),
-          SizedBox(height: 16),
-          Text(
-            'Processing OCR...',
-            style: TextStyle(fontSize: 16, color: AppColors.text2),
-          ),
-          SizedBox(height: 8),
-          Text(
-            'Extracting text from images',
-            style: TextStyle(fontSize: 14, color: AppColors.text3),
-          ),
-        ],
+  Widget _buildEnhancementLabel() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.greenBg.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.green.withOpacity(0.3)),
       ),
-    );
-  }
-
-  Widget _buildTextEditor() {
-    final hasText =
-        widget.ocrResults.isNotEmpty &&
-        _currentPage < widget.ocrResults.length &&
-        widget.ocrResults[_currentPage].text.trim().isNotEmpty;
-
-    if (!hasText) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.text_fields, size: 64, color: AppColors.text3),
-            SizedBox(height: 16),
-            Text(
-              'No text detected',
-              style: TextStyle(fontSize: 16, color: AppColors.text2),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Tap "Extract Text" to scan this page',
-              style: TextStyle(fontSize: 14, color: AppColors.text3),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final result = widget.ocrResults[_currentPage];
-    final confidencePct = (result.confidence * 100)
-        .clamp(0, 100)
-        .toStringAsFixed(0);
-    final source = result.sourceFilter?.label ?? 'Auto';
-
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: const Row(
         children: [
-          Row(
-            children: [
-              const Icon(Icons.edit_note, size: 20, color: AppColors.text2),
-              const SizedBox(width: 8),
-              const Text(
-                'Edit extracted text',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.text2,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                'Page ${_currentPage + 1}',
-                style: const TextStyle(fontSize: 12, color: AppColors.text3),
-              ),
-              const SizedBox(width: 12),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: _textController.text));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Copied to clipboard'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-                child: const Icon(
-                  Icons.copy_all,
-                  size: 20,
-                  color: AppColors.text2,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Confidence: $confidencePct% | Source: $source',
-            style: const TextStyle(fontSize: 12, color: AppColors.text3),
-          ),
-          const SizedBox(height: 10),
+          Icon(Icons.auto_awesome, color: AppColors.green, size: 18),
+          SizedBox(width: 10),
           Expanded(
-            child: TextField(
-              controller: _textController,
-              maxLines: null,
-              expands: true,
-              textAlignVertical: TextAlignVertical.top,
-              style: const TextStyle(
-                fontSize: 15,
-                color: AppColors.text,
-                height: 1.4,
-                letterSpacing: 0.1,
-              ),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                hintText: 'No text detected in this image',
-                hintStyle: TextStyle(color: AppColors.text3),
-                contentPadding: EdgeInsets.zero,
-              ),
-              onChanged: (value) => widget.onTextChanged(_currentPage, value),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildOcrButton() {
-    final hasValidResults =
-        widget.ocrResults.isNotEmpty &&
-        widget.ocrResults.any((r) => r.text.trim().isNotEmpty);
-
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Row(
-        children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: widget.isProcessingOcr ? null : widget.onProcessOcr,
-              icon: widget.isProcessingOcr
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.text_snippet),
-              label: Text(
-                widget.isProcessingOcr
-                    ? 'Processing...'
-                    : hasValidResults
-                    ? 'Refresh Text'
-                    : 'Extract Text',
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.text,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Text(
+              'Perfect Result: Contrast increased, shadows reduced, and text sharpened.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: AppColors.green,
               ),
             ),
           ),
@@ -449,8 +220,8 @@ class _ScanResultPageState extends State<ScanResultPage>
                     Image.file(
                       image,
                       fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) =>
-                          _buildErrorWidget(),
+                      errorBuilder:
+                          (context, error, stackTrace) => _buildErrorWidget(),
                     ),
                     Positioned(
                       top: 12,
@@ -477,80 +248,6 @@ class _ScanResultPageState extends State<ScanResultPage>
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildQualityInfo() {
-    if (widget.ocrResults.isEmpty || _currentPage >= widget.ocrResults.length) {
-      return Padding(
-        padding: const EdgeInsets.all(20),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.info_outline, color: AppColors.text3, size: 20),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Tap "Text (OCR)" tab to extract and edit text',
-                  style: TextStyle(fontSize: 13, color: AppColors.text3),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final result = widget.ocrResults[_currentPage];
-    final hasText = result.text.trim().isNotEmpty;
-    final confidencePct = (result.confidence * 100)
-        .clamp(0, 100)
-        .toStringAsFixed(0);
-    final lowConfidence = result.confidence > 0 && result.confidence < 0.45;
-
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: hasText ? AppColors.greenBg : AppColors.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: hasText ? AppColors.green : AppColors.border,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              hasText ? Icons.check_circle : Icons.warning_amber,
-              color: hasText ? AppColors.green : Colors.orange,
-              size: 20,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                hasText
-                    ? lowConfidence
-                          ? 'Text extracted with low confidence ($confidencePct%). Try Text+ filter in Edit and refresh OCR.'
-                          : 'Text extracted successfully ($confidencePct%)'
-                    : 'No text detected. Try scanning again with better lighting.',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: hasText
-                      ? (lowConfidence ? Colors.orange : AppColors.green)
-                      : Colors.orange,
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -597,9 +294,8 @@ class _ScanResultPageState extends State<ScanResultPage>
               margin: const EdgeInsets.symmetric(horizontal: 4),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _currentPage == index
-                    ? AppColors.text
-                    : AppColors.border,
+                color:
+                    _currentPage == index ? AppColors.text : AppColors.border,
               ),
             ),
           ),
@@ -625,7 +321,20 @@ class _ScanResultPageState extends State<ScanResultPage>
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: widget.onClearScanTap,
+              icon: const Icon(Icons.auto_fix_high),
+              label: const Text('Clear Scan'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.text,
+                side: const BorderSide(color: AppColors.border),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
           Expanded(
             child: ElevatedButton.icon(
               onPressed: widget.scannedImages.isEmpty ? null : widget.onSave,

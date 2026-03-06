@@ -365,19 +365,19 @@ class ScanPipelineService {
     // 2. B&W
     final bw = _toStrongBlackWhite(grayscale);
     final bwFile = File(_buildDerivedPath(sourcePath, 'bw'));
-    await bwFile.writeAsBytes(img.encodeJpg(bw, quality: 85));
+    await bwFile.writeAsBytes(img.encodeJpg(bw, quality: 90));
     variants[DocumentFilterMode.blackWhite] = bwFile;
 
-    // 3. Color Enhanced
+    // 3. Color Enhanced (Perfect Result)
     final colorEnhanced = _enhanceColorDocument(working);
     final colorFile = File(_buildDerivedPath(sourcePath, 'color_plus'));
-    await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 85));
+    await colorFile.writeAsBytes(img.encodeJpg(colorEnhanced, quality: 90));
     variants[DocumentFilterMode.colorEnhanced] = colorFile;
 
-    // 4. Text+
+    // 4. Text+ (High Contrast)
     final textPlus = _highContrastText(working);
     final textPlusFile = File(_buildDerivedPath(sourcePath, 'text_plus'));
-    await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 85));
+    await textPlusFile.writeAsBytes(img.encodeJpg(textPlus, quality: 90));
     variants[DocumentFilterMode.highContrastText] = textPlusFile;
 
     // 5. Warm
@@ -416,30 +416,35 @@ class ScanPipelineService {
       sum += p.r;
     }
     final mean = sum / samples;
-    final threshold = (mean * 0.9).clamp(80.0, 180.0) / 255.0;
+    // Adaptive threshold based on page brightness
+    final threshold = (mean * 0.88).clamp(70.0, 190.0) / 255.0;
 
-    var result = img.adjustColor(grayscale, contrast: 1.5, brightness: 1.1);
+    // Increase contrast before thresholding to reduce shadows
+    var result = img.adjustColor(grayscale, contrast: 1.8, brightness: 1.15);
     return img.luminanceThreshold(result, threshold: threshold);
   }
 
   img.Image _enhanceColorDocument(img.Image source) {
+    // 3. Image Enhancement: Increasing contrast, reducing shadows, sharpening
     var enhanced = img.adjustColor(
       source,
-      contrast: 1.25,
-      brightness: 1.08,
-      saturation: 1.12,
-      gamma: 0.95,
+      contrast: 1.45,
+      brightness: 1.12,
+      saturation: 1.18,
+      gamma: 0.92,
     );
+    // Stronger sharpening filter for "Perfect Result"
     return img.convolution(
       enhanced,
-      filter: [0, -0.2, 0, -0.2, 1.8, -0.2, 0, -0.2, 0],
+      filter: [0, -0.4, 0, -0.4, 2.6, -0.4, 0, -0.4, 0],
     );
   }
 
   img.Image _highContrastText(img.Image source) {
     final gray = img.grayscale(source);
     final bw = _toStrongBlackWhite(gray);
-    return img.adjustColor(bw, contrast: 1.55, brightness: 1.07);
+    // Extreme contrast for text clarity
+    return img.adjustColor(bw, contrast: 1.75, brightness: 1.1);
   }
 
   img.Image _warmPaper(img.Image source) {

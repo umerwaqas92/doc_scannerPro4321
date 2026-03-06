@@ -13,6 +13,7 @@ import 'pages/doc_view_page.dart';
 import 'pages/gallery_page.dart';
 import 'pages/settings_page.dart';
 import 'pages/compressor_page.dart';
+import 'pages/clear_scan_input_page.dart';
 import 'pages/ocr_tool_input_page.dart';
 import 'pages/ocr_tool_result_page.dart';
 import 'pages/pdf_edit_page.dart';
@@ -316,6 +317,13 @@ class _MainScreenState extends State<MainScreen> {
     appState.removeCapturedImage(index);
   }
 
+  void _onClearScan() {
+    setState(() {
+      _showResult = false;
+      _showScanner = true;
+    });
+  }
+
   void _onEditContinue(List<EditSessionState> sessions) {
     final appState = context.read<AppState>();
     appState.applyEditSessions(sessions);
@@ -541,6 +549,14 @@ class _MainScreenState extends State<MainScreen> {
     setState(() => _currentIndex = 0);
   }
 
+  Future<void> _openClearScanTool() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const ClearScanInputPage()));
+    if (!mounted) return;
+    setState(() => _currentIndex = 0);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AppState>(
@@ -617,16 +633,12 @@ class _MainScreenState extends State<MainScreen> {
     if (_showResult) {
       return ScanResultPage(
         scannedImages: appState.capturedImages,
-        ocrResults: appState.ocrResults,
-        isProcessingOcr: appState.isProcessingOcr,
         onRetry: _onResultRetry,
         onSave: _onResultSave,
         onBack: _onResultBack,
         onRemoveImage: _onResultRemoveImage,
         onAddMore: _onResultAddMore,
-        onProcessOcr: () => appState.processOcrForAllImages(),
-        onTextChanged:
-            (pageIndex, text) => appState.updateOcrTextForPage(pageIndex, text),
+        onClearScanTap: _onClearScan,
       );
     }
 
@@ -640,6 +652,7 @@ class _MainScreenState extends State<MainScreen> {
           onSeeAllTap: _onSeeAllTap,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
+          onClearScanToolTap: _openClearScanTool,
           onShareToolTap: _openShareTool,
           onCompressToolTap: _openCompressorTool,
         );
@@ -686,6 +699,7 @@ class _MainScreenState extends State<MainScreen> {
           onSeeAllTap: _onSeeAllTap,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
+          onClearScanToolTap: _openClearScanTool,
           onShareToolTap: _openShareTool,
           onCompressToolTap: _openCompressorTool,
         );
@@ -723,6 +737,7 @@ class _MainScreenState extends State<MainScreen> {
           onSeeAllTap: _onSeeAllTap,
           onPdfToolTap: _openPdfMaker,
           onOcrToolTap: _openOcrTool,
+          onClearScanToolTap: _openClearScanTool,
           onShareToolTap: _openShareTool,
           onCompressToolTap: _openCompressorTool,
         );

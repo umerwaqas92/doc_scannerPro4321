@@ -50,7 +50,7 @@ class BottomNavWidget extends StatelessWidget {
     String label,
   ) {
     final isActive = currentIndex == index;
-    return Expanded(
+    return Flexible(
       child: GestureDetector(
         onTap: () => onTap(index),
         behavior: HitTestBehavior.opaque,
@@ -67,6 +67,8 @@ class BottomNavWidget extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
@@ -81,7 +83,7 @@ class BottomNavWidget extends StatelessWidget {
   }
 
   Widget _buildScanButton() {
-    return Expanded(
+    return Flexible(
       child: GestureDetector(
         onTap: onScanTap,
         behavior: HitTestBehavior.opaque,
@@ -113,6 +115,8 @@ class BottomNavWidget extends StatelessWidget {
               const SizedBox(height: 4),
               const Text(
                 'Scan',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w500,
