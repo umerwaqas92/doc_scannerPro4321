@@ -5,9 +5,8 @@ import 'package:permission_handler/permission_handler.dart';
 class ImagePickerService {
   final ImagePicker _picker = ImagePicker();
 
-  Future<bool> requestPermissions() async {
-    final status = await Permission.photos.request();
-    return status.isGranted || status.isLimited;
+    Future<bool> requestPermissions() async {
+    return true;
   }
 
   Future<File?> pickFromGallery() async {
