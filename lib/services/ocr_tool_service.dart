@@ -23,19 +23,35 @@ class OcrToolService {
   final OcrService _ocrService = OcrService();
 
   Future<OcrToolPageResult> processImage(File imageFile) async {
-    final clear = await _createClearPreview(
-      imageFile,
-      tag: 'clear_img',
-      index: 1,
-    );
-    final variants = <File>[if (clear != null) clear, imageFile];
-    final result = await _ocrService.processImageWithVariants(variants);
-    return OcrToolPageResult(
-      pages: [result],
-      clearPages: [clear ?? imageFile],
-      fromPdf: false,
-      sourceName: imageFile.path.split('/').last,
-    );
+    File? ocrVariant;
+    try {
+      final clear = await _createDisplayClearPreview(
+        imageFile,
+        tag: 'clear_img',
+        index: 1,
+      );
+      ocrVariant = await _createOcrVariantForDetection(
+        imageFile,
+        tag: 'clear_img',
+        index: 1,
+      );
+
+      final variants = <File>[
+        if (ocrVariant != null) ocrVariant,
+        if (clear != null) clear,
+        imageFile,
+      ];
+      final result = await _ocrService.processImageWithVariants(variants);
+
+      return OcrToolPageResult(
+        pages: [result],
+        clearPages: [clear ?? imageFile],
+        fromPdf: false,
+        sourceName: imageFile.path.split('/').last,
+      );
+    } finally {
+      await _deleteIfExists(ocrVariant);
+    }
   }
 
   Future<OcrToolPageResult> processPdf(File pdfFile) async {
@@ -48,26 +64,38 @@ class OcrToolService {
       index++;
       final png = await page.toPng();
       final imageFile = await _writeTempImage(png, index: index);
-      final clear = await _createClearPreview(
-        imageFile,
-        tag: 'clear_pdf',
-        index: index,
-      );
-      final variants = <File>[if (clear != null) clear, imageFile];
-      final result = await _ocrService.processImageWithVariants(variants);
-      pages.add(result);
-      if (clear != null) {
-        clearPages.add(clear);
-      } else {
-        clearPages.add(
-          await _persistDisplayCopy(imageFile, tag: 'pdf_page', index: index),
-        );
-      }
+      File? ocrVariant;
       try {
-        if (await imageFile.exists()) {
-          await imageFile.delete();
+        final clear = await _createDisplayClearPreview(
+          imageFile,
+          tag: 'clear_pdf',
+          index: index,
+        );
+        ocrVariant = await _createOcrVariantForDetection(
+          imageFile,
+          tag: 'clear_pdf',
+          index: index,
+        );
+
+        final variants = <File>[
+          if (ocrVariant != null) ocrVariant,
+          if (clear != null) clear,
+          imageFile,
+        ];
+        final result = await _ocrService.processImageWithVariants(variants);
+        pages.add(result);
+
+        if (clear != null) {
+          clearPages.add(clear);
+        } else {
+          clearPages.add(
+            await _persistDisplayCopy(imageFile, tag: 'pdf_page', index: index),
+          );
         }
-      } catch (_) {}
+      } finally {
+        await _deleteIfExists(ocrVariant);
+        await _deleteIfExists(imageFile);
+      }
     }
 
     return OcrToolPageResult(
@@ -92,13 +120,11 @@ class OcrToolService {
     required String tag,
     required int index,
   }) async {
-    final dir = await getTemporaryDirectory();
-    final path =
-        '${dir.path}/ocr_${tag}_${DateTime.now().microsecondsSinceEpoch}_$index.jpg';
+    final path = await _buildOutputPath(tag: tag, index: index);
     return source.copy(path);
   }
 
-  Future<File?> _createClearPreview(
+  Future<File?> _createDisplayClearPreview(
     File source, {
     required String tag,
     required int index,
@@ -121,19 +147,81 @@ class OcrToolService {
         );
       }
 
-      final gray = img.grayscale(image);
-      final boosted = img.adjustColor(gray, contrast: 1.95, brightness: 1.08);
-      final mean = _meanLuma(boosted);
-      final threshold = ((mean / 255.0) * 0.92).clamp(0.38, 0.62);
-      var cleaned = img.luminanceThreshold(boosted, threshold: threshold);
-      cleaned = img.adjustColor(cleaned, contrast: 1.14, brightness: 1.05);
+      final sourceLuma = _meanLuma(image);
+      final denoised = img.gaussianBlur(image, radius: 1);
+      final colorBoosted = img.adjustColor(
+        denoised,
+        contrast: 1.14,
+        brightness: 1.05,
+        saturation: 1.10,
+        gamma: 0.97,
+      );
+      var cleaned = img.convolution(
+        colorBoosted,
+        filter: [0, -0.18, 0, -0.18, 1.72, -0.18, 0, -0.18, 0],
+      );
 
-      final out = await _persistDisplayCopy(source, tag: tag, index: index);
+      final outLuma = _meanLuma(cleaned);
+      if (outLuma < 46 || outLuma < sourceLuma * 0.52 || outLuma > 244) {
+        cleaned = img.adjustColor(
+          image,
+          contrast: 1.08,
+          brightness: 1.04,
+          saturation: 1.06,
+          gamma: 0.98,
+        );
+      }
+
+      final out = File(await _buildOutputPath(tag: tag, index: index));
       await out.writeAsBytes(img.encodeJpg(cleaned, quality: 95), flush: true);
       return out;
     } catch (_) {
       return null;
     }
+  }
+
+  Future<File?> _createOcrVariantForDetection(
+    File source, {
+    required String tag,
+    required int index,
+  }) async {
+    try {
+      final bytes = await source.readAsBytes();
+      var image = img.decodeImage(bytes);
+      if (image == null) return null;
+      image = img.bakeOrientation(image);
+
+      final gray = img.grayscale(image);
+      final boosted = img.adjustColor(gray, contrast: 1.60, brightness: 1.10);
+      final soft = img.gaussianBlur(boosted, radius: 1);
+      final mean = _meanLuma(soft);
+      final threshold = ((mean / 255.0) * 0.94).clamp(0.42, 0.62);
+      var ocrReady = img.luminanceThreshold(soft, threshold: threshold);
+      ocrReady = img.adjustColor(ocrReady, contrast: 1.12, brightness: 1.05);
+
+      final out = File(await _buildOutputPath(tag: '${tag}_ocr', index: index));
+      await out.writeAsBytes(img.encodeJpg(ocrReady, quality: 95), flush: true);
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String> _buildOutputPath({
+    required String tag,
+    required int index,
+  }) async {
+    final dir = await getTemporaryDirectory();
+    return '${dir.path}/ocr_${tag}_${DateTime.now().microsecondsSinceEpoch}_$index.jpg';
+  }
+
+  Future<void> _deleteIfExists(File? file) async {
+    if (file == null) return;
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
   }
 
   double _meanLuma(img.Image image) {
