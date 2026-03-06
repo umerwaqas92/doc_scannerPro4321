@@ -107,11 +107,14 @@ class _MainScreenState extends State<MainScreen> {
   Future<bool> _onScannerCapture() async {
     final appState = context.read<AppState>();
     final beforeCount = appState.capturedImages.length;
-    final captured = appState.isBatchActive
-        ? await appState.captureImageForBatch()
-        : await appState.captureImage();
+    final captured =
+        appState.isBatchActive
+            ? await appState.captureImageForBatch()
+            : await appState.captureImage();
     if (captured == null) {
-      _showScannerError('No clear document detected. Try again.');
+      _showScannerError(
+        'Capture failed (dark/invalid image). Try again with more light and a steady camera.',
+      );
       return false;
     }
     if (appState.isBatchActive) {
@@ -138,15 +141,16 @@ class _MainScreenState extends State<MainScreen> {
 
   bool _validateLastCapturedDocument(
     int previousCount, {
-    String errorMessage = 'No clear document detected. Try again.',
+    String errorMessage = 'Capture failed (dark/invalid image). Try again.',
   }) {
     final appState = context.read<AppState>();
     if (appState.capturedImages.length <= previousCount) return false;
 
     final index = appState.capturedImages.length - 1;
-    final pipeline = index < appState.pipelineResults.length
-        ? appState.pipelineResults[index]
-        : null;
+    final pipeline =
+        index < appState.pipelineResults.length
+            ? appState.pipelineResults[index]
+            : null;
 
     // Keep capture flow permissive: users can manually scan any page and fix in edit.
     if (pipeline == null) return true;
@@ -278,12 +282,12 @@ class _MainScreenState extends State<MainScreen> {
       _currentIndex = 0;
     });
 
-    final galleryNote = result.totalGalleryImages == 0
-        ? 'No images to export'
-        : 'Gallery: ${result.gallerySavedCount}/${result.totalGalleryImages}';
-    final errorNote = result.exportErrors.isEmpty
-        ? ''
-        : ' (${result.exportErrors.first})';
+    final galleryNote =
+        result.totalGalleryImages == 0
+            ? 'No images to export'
+            : 'Gallery: ${result.gallerySavedCount}/${result.totalGalleryImages}';
+    final errorNote =
+        result.exportErrors.isEmpty ? '' : ' (${result.exportErrors.first})';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Saved to history. $galleryNote$errorNote'),
@@ -431,9 +435,10 @@ class _MainScreenState extends State<MainScreen> {
     }
     final tool = OcrToolService();
     try {
-      final result = doc.isPdf
-          ? await tool.processPdf(file)
-          : await tool.processImage(file);
+      final result =
+          doc.isPdf
+              ? await tool.processPdf(file)
+              : await tool.processImage(file);
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => OcrToolResultPage(result: result)),
@@ -472,26 +477,28 @@ class _MainScreenState extends State<MainScreen> {
 
     final updated = await navigator.push<ScannedDocument>(
       MaterialPageRoute(
-        builder: (pageContext) => ImageEditPage(
-          images: [image],
-          pipelineResults: <ScanPipelineResult?>[null],
-          onBack: () => Navigator.of(pageContext).pop(),
-          onContinue: (sessions) async {
-            final output = sessions.isEmpty ? null : sessions.first.outputFile;
-            if (output == null) {
-              Navigator.of(pageContext).pop();
-              return;
-            }
-            final saved = await appState.importAnyFile(
-              output,
-              name:
-                  '${doc.name.replaceAll('.jpg', '').replaceAll('.jpeg', '')}_edited',
-              pageCount: 1,
-            );
-            if (!pageContext.mounted) return;
-            Navigator.of(pageContext).pop(saved);
-          },
-        ),
+        builder:
+            (pageContext) => ImageEditPage(
+              images: [image],
+              pipelineResults: <ScanPipelineResult?>[null],
+              onBack: () => Navigator.of(pageContext).pop(),
+              onContinue: (sessions) async {
+                final output =
+                    sessions.isEmpty ? null : sessions.first.outputFile;
+                if (output == null) {
+                  Navigator.of(pageContext).pop();
+                  return;
+                }
+                final saved = await appState.importAnyFile(
+                  output,
+                  name:
+                      '${doc.name.replaceAll('.jpg', '').replaceAll('.jpeg', '')}_edited',
+                  pageCount: 1,
+                );
+                if (!pageContext.mounted) return;
+                Navigator.of(pageContext).pop(saved);
+              },
+            ),
       ),
     );
     if (updated != null) {
@@ -618,8 +625,8 @@ class _MainScreenState extends State<MainScreen> {
         onRemoveImage: _onResultRemoveImage,
         onAddMore: _onResultAddMore,
         onProcessOcr: () => appState.processOcrForAllImages(),
-        onTextChanged: (pageIndex, text) =>
-            appState.updateOcrTextForPage(pageIndex, text),
+        onTextChanged:
+            (pageIndex, text) => appState.updateOcrTextForPage(pageIndex, text),
       );
     }
 

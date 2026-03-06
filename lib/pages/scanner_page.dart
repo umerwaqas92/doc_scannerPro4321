@@ -43,13 +43,8 @@ class ScannerPage extends StatefulWidget {
 }
 
 enum _FlashSetting { auto, on, off }
-enum _ScannerPhase {
-  detecting,
-  ready,
-  capturing,
-  analyzingLocked,
-  cooldown,
-}
+
+enum _ScannerPhase { detecting, ready, capturing, analyzingLocked, cooldown }
 
 class _ScannerPageState extends State<ScannerPage>
     with TickerProviderStateMixin {
@@ -102,13 +97,15 @@ class _ScannerPageState extends State<ScannerPage>
       parent: _openController,
       curve: const Interval(0.0, 0.7, curve: Curves.easeOut),
     );
-    _cameraSlide = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
-        .animate(
-          CurvedAnimation(
-            parent: _openController,
-            curve: const Interval(0.0, 0.7, curve: Curves.easeOutCubic),
-          ),
-        );
+    _cameraSlide = Tween<Offset>(
+      begin: const Offset(0, 0.06),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _openController,
+        curve: const Interval(0.0, 0.7, curve: Curves.easeOutCubic),
+      ),
+    );
     _overlayFade = CurvedAnimation(
       parent: _openController,
       curve: const Interval(0.25, 1.0, curve: Curves.easeOut),
@@ -167,7 +164,9 @@ class _ScannerPageState extends State<ScannerPage>
       if (mounted) {
         setState(() {
           _scannerPhase = _ScannerPhase.detecting;
-          _cooldownUntil = DateTime.now().add(const Duration(milliseconds: 550));
+          _cooldownUntil = DateTime.now().add(
+            const Duration(milliseconds: 550),
+          );
         });
       } else {
         _scannerPhase = _ScannerPhase.detecting;
@@ -175,12 +174,12 @@ class _ScannerPageState extends State<ScannerPage>
       unawaited(_startLiveAnalyzerIfPossible());
     }
 
-    final previousCount = _batchMode
-        ? oldWidget.batchImages.length
-        : oldWidget.capturedImages.length;
-    final newCount = _batchMode
-        ? widget.batchImages.length
-        : widget.capturedImages.length;
+    final previousCount =
+        _batchMode
+            ? oldWidget.batchImages.length
+            : oldWidget.capturedImages.length;
+    final newCount =
+        _batchMode ? widget.batchImages.length : widget.capturedImages.length;
     if (newCount > previousCount) {
       _stableFrameCount = 0;
       _isStable = false;
@@ -445,11 +444,10 @@ class _ScannerPageState extends State<ScannerPage>
 
     final brightnessScore = (1.0 - ((brightnessNorm - 0.62).abs() / 0.62))
         .clamp(0.0, 1.0);
-    final confidence =
-        (edgeNorm * 0.55 + varianceNorm * 0.30 + brightnessScore * 0.15).clamp(
-          0.0,
-          1.0,
-        );
+    final confidence = (edgeNorm * 0.55 +
+            varianceNorm * 0.30 +
+            brightnessScore * 0.15)
+        .clamp(0.0, 1.0);
 
     final occluded =
         brightnessNorm < 0.09 ||
@@ -554,11 +552,12 @@ class _ScannerPageState extends State<ScannerPage>
           child: SizedBox(
             width: width,
             height: height,
-            child: _isBusy
-                ? _buildCameraBlockedPreview()
-                : activeController != null
-                ? CameraPreview(activeController)
-                : _buildCameraPlaceholder(),
+            child:
+                _isBusy
+                    ? _buildCameraBlockedPreview()
+                    : activeController != null
+                    ? CameraPreview(activeController)
+                    : _buildCameraPlaceholder(),
           ),
         );
       },
@@ -662,12 +661,14 @@ class _ScannerPageState extends State<ScannerPage>
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
-              color: _scannerPhase == _ScannerPhase.ready
-                  ? AppColors.green
-                  : Colors.white54,
-              fontWeight: _scannerPhase == _ScannerPhase.detecting
-                  ? FontWeight.normal
-                  : FontWeight.w600,
+              color:
+                  _scannerPhase == _ScannerPhase.ready
+                      ? AppColors.green
+                      : Colors.white54,
+              fontWeight:
+                  _scannerPhase == _ScannerPhase.detecting
+                      ? FontWeight.normal
+                      : FontWeight.w600,
             ),
           ),
         ),
@@ -1042,23 +1043,24 @@ class _ScannerPageState extends State<ScannerPage>
               border: Border.all(color: AppColors.green, width: 3),
             ),
             child: Center(
-              child: _isBusy
-                  ? const SizedBox(
-                      width: 28,
-                      height: 28,
-                      child: CircularProgressIndicator(
-                        color: AppColors.green,
-                        strokeWidth: 3,
+              child:
+                  _isBusy
+                      ? const SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(
+                          color: AppColors.green,
+                          strokeWidth: 3,
+                        ),
+                      )
+                      : Container(
+                        width: 24,
+                        height: 24,
+                        decoration: const BoxDecoration(
+                          color: AppColors.green,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    )
-                  : Container(
-                      width: 24,
-                      height: 24,
-                      decoration: const BoxDecoration(
-                        color: AppColors.green,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
             ),
           ),
         ),
@@ -1109,6 +1111,8 @@ class _ScannerPageState extends State<ScannerPage>
     });
 
     await _stopLiveAnalyzer();
+    // Allow the camera pipeline to settle after stopping image stream.
+    await Future.delayed(const Duration(milliseconds: 120));
 
     var capturedAdded = false;
     try {
@@ -1123,9 +1127,10 @@ class _ScannerPageState extends State<ScannerPage>
           } else {
             _setCooldown();
           }
-          _liveStatus = capturedAdded && _batchMode
-              ? 'Page ${_activeImages.length} added'
-              : 'Searching for document...';
+          _liveStatus =
+              capturedAdded && _batchMode
+                  ? 'Page ${_activeImages.length} added'
+                  : 'Searching for document...';
         });
       }
     }
@@ -1170,9 +1175,10 @@ class _ScannerPageState extends State<ScannerPage>
           } else {
             _setCooldown();
           }
-          _liveStatus = capturedAdded && _batchMode
-              ? 'Page ${_activeImages.length} added'
-              : 'Searching for document...';
+          _liveStatus =
+              capturedAdded && _batchMode
+                  ? 'Page ${_activeImages.length} added'
+                  : 'Searching for document...';
         });
       }
     }
@@ -1235,7 +1241,9 @@ class _ScannerPageState extends State<ScannerPage>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
-              widget.isAnalyzing ? 'Analyzing document...' : 'Capturing image...',
+              widget.isAnalyzing
+                  ? 'Analyzing document...'
+                  : 'Capturing image...',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 20,

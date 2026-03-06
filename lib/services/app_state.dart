@@ -99,32 +99,38 @@ class AppState extends ChangeNotifier {
   Future<File?> captureImage() async {
     final image = await _cameraService.captureImage();
     if (image == null) return null;
-    if (!await image.exists()) return null;
-    if (await image.length() == 0) return null;
-    await _addImageAndRunPipeline(image);
+    if (!await _isUsableCaptureImage(image)) {
+      debugPrint('Captured image rejected (invalid/black): ${image.path}');
+      return null;
+    }
+    final accepted = await _addImageAndRunPipeline(image);
+    if (!accepted) {
+      debugPrint('Capture rejected after pipeline checks: ${image.path}');
+      return null;
+    }
     return image;
   }
 
   Future<File?> captureImageForBatch() async {
     final image = await _cameraService.captureImage();
     if (image == null) return null;
-    if (!await image.exists()) return null;
-    if (await image.length() == 0) return null;
+    if (!await _isUsableCaptureImage(image)) return null;
     _batchRawImages.add(image);
     notifyListeners();
     return image;
   }
 
-  Future<void> _addImageAndRunPipeline(File image) async {
+  Future<bool> _addImageAndRunPipeline(File image) async {
     final originalPath = image.path;
     _capturedImages.add(image);
     _pipelineResults.add(null);
     notifyListeners();
+    var captureAccepted = true;
 
     _activeAnalysisCount++;
     _analysisStageText = 'Analyzing document...';
     notifyListeners();
-    
+
     debugPrint('Running pipeline for ${image.path}');
 
     try {
@@ -140,20 +146,46 @@ class AppState extends ChangeNotifier {
         },
       );
       final index = _capturedImages.indexWhere((f) => f.path == originalPath);
-      if (result != null &&
+      final hasValidIndex =
           index != -1 &&
           index < _capturedImages.length &&
-          index < _pipelineResults.length) {
+          index < _pipelineResults.length;
+      if (!hasValidIndex) {
+        return false;
+      }
+
+      if (result != null) {
         final selectedByCapture =
             result.enhancedVariants[_captureFilterMode] ??
             result.selectedOutputFile;
-        _pipelineResults[index] = result.copyWith(
-          selectedFilter: _captureFilterMode,
+        final output = await _selectPreferredOutput(
+          preferred: selectedByCapture,
+          fallback: image,
         );
-        _capturedImages[index] = selectedByCapture;
+        if (output == null) {
+          _dropCaptureAt(index);
+          captureAccepted = false;
+        } else {
+          _pipelineResults[index] = result.copyWith(
+            selectedFilter: _captureFilterMode,
+          );
+          _capturedImages[index] = output;
+        }
+      } else if (!await _isUsableCaptureImage(image)) {
+        _dropCaptureAt(index);
+        captureAccepted = false;
       }
     } catch (e) {
       debugPrint('Pipeline analysis failed for image ${image.path}: $e');
+      final index = _capturedImages.indexWhere((f) => f.path == originalPath);
+      final hasValidIndex =
+          index != -1 &&
+          index < _capturedImages.length &&
+          index < _pipelineResults.length;
+      if (hasValidIndex && !await _isUsableCaptureImage(image)) {
+        _dropCaptureAt(index);
+        captureAccepted = false;
+      }
     } finally {
       _activeAnalysisCount = (_activeAnalysisCount - 1).clamp(0, 9999).toInt();
       if (_activeAnalysisCount == 0) {
@@ -161,6 +193,7 @@ class AppState extends ChangeNotifier {
       }
       notifyListeners();
     }
+    return captureAccepted;
   }
 
   Future<void> addImageFromGallery() async {
@@ -241,29 +274,11 @@ class AppState extends ChangeNotifier {
           final candidate =
               result.enhancedVariants[_captureFilterMode] ??
               result.selectedOutputFile;
-          
-          // Double check if the processed result is black/bad
-          bool useCandidate = await _isValidImageFile(candidate);
-          if (useCandidate && _captureFilterMode != DocumentFilterMode.original) {
-            // Check if the filtered version is too dark compared to original
-            final bytes = await candidate.readAsBytes();
-            final decoded = img.decodeImage(bytes);
-            if (decoded != null) {
-              double sum = 0;
-              for (int i = 0; i < 100; i++) {
-                final p = decoded.getPixel(
-                  (i * 13) % decoded.width,
-                  (i * 17) % decoded.height,
-                );
-                sum += p.luminance;
-              }
-              if (sum / 100 < 8) { // Very dark
-                useCandidate = false;
-              }
-            }
-          }
-          
-          outputs.add(useCandidate ? candidate : image);
+          final selected = await _selectPreferredOutput(
+            preferred: candidate,
+            fallback: image,
+          );
+          outputs.add(selected ?? image);
         } else {
           outputs.add(image);
           results.add(null);
@@ -273,10 +288,10 @@ class AppState extends ChangeNotifier {
       final finalOutputs = <File>[];
       for (var i = 0; i < outputs.length; i++) {
         final candidate = outputs[i];
-        if (await _isValidImageFile(candidate)) {
+        if (await _isUsableCaptureImage(candidate)) {
           finalOutputs.add(candidate);
         } else if (i < _batchRawImages.length &&
-            await _isValidImageFile(_batchRawImages[i])) {
+            await _isUsableCaptureImage(_batchRawImages[i])) {
           finalOutputs.add(_batchRawImages[i]);
         }
       }
@@ -422,9 +437,10 @@ class AppState extends ChangeNotifier {
     final lines = <String>[];
     for (var i = 0; i < _ocrResults.length; i++) {
       final edited = _editedOcrTexts[i];
-      final text = (edited != null && edited.trim().isNotEmpty)
-          ? edited
-          : _ocrResults[i].text;
+      final text =
+          (edited != null && edited.trim().isNotEmpty)
+              ? edited
+              : _ocrResults[i].text;
       if (text.trim().isNotEmpty) {
         lines.add(text.trim());
       }
@@ -534,9 +550,8 @@ class AppState extends ChangeNotifier {
     try {
       final docsPath = await _storageService.getDocumentsDirectory();
       final stamp = DateTime.now().millisecondsSinceEpoch;
-      final baseName = (name == null || name.trim().isEmpty)
-          ? 'Imported_$stamp'
-          : name;
+      final baseName =
+          (name == null || name.trim().isEmpty) ? 'Imported_$stamp' : name;
       final targetPath = '$docsPath/$baseName.pdf';
       final copied = await pdfFile.copy(targetPath);
       final doc = ScannedDocument(
@@ -571,9 +586,8 @@ class AppState extends ChangeNotifier {
       final docsPath = await _storageService.getDocumentsDirectory();
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final ext = _safeExtension(file.path);
-      final baseName = (name == null || name.trim().isEmpty)
-          ? 'Imported_$stamp'
-          : name;
+      final baseName =
+          (name == null || name.trim().isEmpty) ? 'Imported_$stamp' : name;
       final targetPath = '$docsPath/$baseName$ext';
       final copied = await file.copy(targetPath);
       final isPdf = ext.toLowerCase() == '.pdf';
@@ -705,14 +719,9 @@ class AppState extends ChangeNotifier {
   Future<List<File>> _filterValidImages(List<File> sources) async {
     final valid = <File>[];
     for (final file in sources) {
-      try {
-        if (!await file.exists()) continue;
-        final bytes = await file.readAsBytes();
-        final decoded = img.decodeImage(bytes);
-        if (decoded != null) {
-          valid.add(file);
-        }
-      } catch (_) {}
+      if (await _isValidImageFile(file)) {
+        valid.add(file);
+      }
     }
     return valid;
   }
@@ -728,11 +737,68 @@ class AppState extends ChangeNotifier {
   Future<bool> _isValidImageFile(File file) async {
     try {
       if (!await file.exists()) return false;
+      if (await file.length() == 0) return false;
       final bytes = await file.readAsBytes();
       final decoded = img.decodeImage(bytes);
       return decoded != null;
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<bool> _isUsableCaptureImage(File file) async {
+    if (!await _isValidImageFile(file)) return false;
+    return !await _isLikelyBlackFrame(file);
+  }
+
+  Future<bool> _isLikelyBlackFrame(File file) async {
+    final luminance = await _sampleMeanLuminance(file);
+    if (luminance == null) return true;
+    return luminance < 8.0;
+  }
+
+  Future<double?> _sampleMeanLuminance(File file, {int samples = 120}) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null || decoded.width == 0 || decoded.height == 0) {
+        return null;
+      }
+      double sum = 0;
+      for (int i = 0; i < samples; i++) {
+        final p = decoded.getPixel(
+          (i * 13) % decoded.width,
+          (i * 17) % decoded.height,
+        );
+        sum += p.luminance;
+      }
+      return sum / samples;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<File?> _selectPreferredOutput({
+    required File preferred,
+    required File fallback,
+  }) async {
+    if (await _isUsableCaptureImage(preferred)) {
+      return preferred;
+    }
+    if (await _isUsableCaptureImage(fallback)) {
+      return fallback;
+    }
+    return null;
+  }
+
+  void _dropCaptureAt(int index) {
+    if (index < 0 || index >= _capturedImages.length) return;
+    _capturedImages.removeAt(index);
+    if (index < _pipelineResults.length) {
+      _pipelineResults.removeAt(index);
+    }
+    if (index < _ocrResults.length) {
+      _ocrResults.removeAt(index);
     }
   }
 }

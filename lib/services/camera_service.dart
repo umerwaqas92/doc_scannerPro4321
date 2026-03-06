@@ -74,9 +74,10 @@ class CameraService {
         selectedCamera,
         ResolutionPreset.veryHigh,
         enableAudio: false,
-        imageFormatGroup: Platform.isIOS
-            ? ImageFormatGroup.bgra8888
-            : ImageFormatGroup.yuv420,
+        imageFormatGroup:
+            Platform.isIOS
+                ? ImageFormatGroup.bgra8888
+                : ImageFormatGroup.yuv420,
       );
 
       await _controller!.initialize();
@@ -118,9 +119,11 @@ class CameraService {
     _isCapturing = true;
 
     try {
+      await _waitForCameraReadyForCapture();
       await _controller!.setFlashMode(_currentFlashMode);
 
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 180));
+      await _waitForCameraReadyForCapture();
 
       final XFile image = await _controller!.takePicture();
       debugPrint('Image captured: ${image.path}');
@@ -130,6 +133,19 @@ class CameraService {
       return null;
     } finally {
       _isCapturing = false;
+    }
+  }
+
+  Future<void> _waitForCameraReadyForCapture() async {
+    final controller = _controller;
+    if (controller == null) return;
+    for (var i = 0; i < 10; i++) {
+      final value = controller.value;
+      if (!value.isInitialized) return;
+      if (!value.isTakingPicture && !value.isStreamingImages) {
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 35));
     }
   }
 
