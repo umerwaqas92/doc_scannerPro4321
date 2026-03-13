@@ -39,7 +39,7 @@ class DocScanApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => AppState()..initialize(),
       child: MaterialApp(
-        title: 'DocScan',
+        title: 'Smart Scan – PDF Scanner App',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: AppColors.accent),
