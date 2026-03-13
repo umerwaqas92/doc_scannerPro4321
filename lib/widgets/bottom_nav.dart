@@ -50,7 +50,7 @@ class BottomNavWidget extends StatelessWidget {
     String label,
   ) {
     final isActive = currentIndex == index;
-    return Flexible(
+    return Expanded(
       child: GestureDetector(
         onTap: () => onTap(index),
         behavior: HitTestBehavior.opaque,
@@ -83,7 +83,7 @@ class BottomNavWidget extends StatelessWidget {
   }
 
   Widget _buildScanButton() {
-    return Flexible(
+    return Expanded(
       child: GestureDetector(
         onTap: onScanTap,
         behavior: HitTestBehavior.opaque,
