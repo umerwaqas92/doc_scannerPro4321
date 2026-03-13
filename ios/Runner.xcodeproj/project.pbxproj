@@ -497,7 +497,7 @@
 				DEVELOPMENT_TEAM = NSRQ4T2HY4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Doc Scanner";
+				INFOPLIST_KEY_CFBundleDisplayName = "Smart Scan – PDF Scanner App";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -693,7 +693,7 @@
 				DEVELOPMENT_TEAM = NSRQ4T2HY4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Doc Scanner";
+				INFOPLIST_KEY_CFBundleDisplayName = "Smart Scan – PDF Scanner App";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -725,7 +725,7 @@
 				DEVELOPMENT_TEAM = NSRQ4T2HY4;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "Doc Scanner";
+				INFOPLIST_KEY_CFBundleDisplayName = "Smart Scan – PDF Scanner App";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
